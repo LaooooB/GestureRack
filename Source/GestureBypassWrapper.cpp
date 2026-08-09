@@ -90,7 +90,6 @@ void GestureBypassWrapper::processBlock (juce::AudioBuffer<float>& buffer, juce:
     const auto channels = juce::jmin (buffer.getNumChannels(), dryBuffer.getNumChannels());
     const auto samples = buffer.getNumSamples();
 
-    // Latency-compensated dry path.
     for (int sample = 0; sample < samples; ++sample)
     {
         for (int channel = 0; channel < channels; ++channel)
@@ -100,8 +99,6 @@ void GestureBypassWrapper::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
     }
 
-    // Keep the child running even while audibly bypassed. This preserves tails and avoids clicks
-    // when the hand changes state. A future "eco bypass" can suspend it after the fade completes.
     child->processBlock (buffer, midi);
 
     for (int sample = 0; sample < samples; ++sample)
