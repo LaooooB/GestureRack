@@ -180,11 +180,14 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     drawHand (g, leftHandArea.toFloat(), snapshot.left, connected,
               juce::Colour::fromRGB (96, 158, 235), "PHYSICAL LEFT / SELECTOR");
 
-    const auto rightColour = processor.isGestureBypassed()
-        ? juce::Colour::fromRGB (235, 92, 92)
-        : juce::Colour::fromRGB (92, 220, 155);
+    const auto rightArmed = processor.isRightControllerArmed();
+    const auto rightColour = ! rightArmed
+        ? juce::Colour::fromRGB (238, 174, 76)
+        : (processor.isGestureBypassed()
+            ? juce::Colour::fromRGB (235, 92, 92)
+            : juce::Colour::fromRGB (92, 220, 155));
     drawHand (g, rightHandArea.toFloat(), snapshot.right, connected,
-              rightColour, "PHYSICAL RIGHT / CONTROL");
+              rightColour, rightArmed ? "PHYSICAL RIGHT / CONTROL" : "PHYSICAL RIGHT / RE-ARM");
 
     const auto selected = processor.getSelectedSlot();
     const auto loaded = processor.isSlotLoaded (selected);
@@ -212,22 +215,29 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText (loaded ? (bypassed ? "BYPASSED" : "ACTIVE") : "EMPTY SLOT",
                 stateRect, juce::Justification::centred);
 
+    const auto runtimeLine = infoArea.removeFromTop (16);
+    g.setColour (rightArmed ? juce::Colour::fromRGB (116, 205, 161)
+                            : juce::Colour::fromRGB (238, 174, 76));
+    g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+    g.drawFittedText (processor.getGestureRuntimeStatus(), runtimeLine,
+                      juce::Justification::centredLeft, 1);
+
     g.setColour (juce::Colour::fromRGB (118, 125, 139));
-    g.setFont (juce::FontOptions (9.5f));
-    const juce::String leftStatus = connected
-        ? (snapshot.left.present ? "LEFT TRACKED" : "LEFT NOT VISIBLE")
-        : "VISION OFFLINE";
-    const auto rightGesture = snapshot.right.present
-        ? gr::controlGestureToString (snapshot.right.stableGesture).toUpperCase()
-        : juce::String ("NO RIGHT HAND");
+    g.setFont (juce::FontOptions (9.0f));
+    const auto leftStatus = connected
+        ? (snapshot.left.present
+            ? "L:" + juce::String (snapshot.left.stableSlot > 0 ? snapshot.left.stableSlot : 0)
+            : juce::String ("L:--"))
+        : juce::String ("VISION OFFLINE");
     const auto rightHeight = snapshot.right.present
         ? juce::String (snapshot.right.height, 2)
         : juce::String ("--");
 
-    g.drawFittedText (leftStatus + "  |  RIGHT: " + rightGesture
-                      + "  H:" + rightHeight
-                      + "  |  MAPS:" + juce::String (processor.getSlotMappingCount (selected)),
-                      infoArea, juce::Justification::centredLeft, 2);
+    g.drawFittedText (leftStatus
+                      + "  |  H:" + rightHeight
+                      + "  |  LIVE:" + juce::String (processor.getLiveMappingCount())
+                      + "  |  TOTAL:" + juce::String (processor.getSlotMappingCount (selected)),
+                      infoArea, juce::Justification::centredLeft, 1);
 
     if (const auto error = processor.getSlotLastError (selected); error.isNotEmpty())
     {
