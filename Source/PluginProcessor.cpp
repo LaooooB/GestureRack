@@ -111,17 +111,70 @@ void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& 
 
 void GestureRackAudioProcessor::timerCallback()
 {
-    const auto snapshot = vision.getSnapshot();
+    const auto snapshot = vision.getDualHandSnapshot();
+    const auto connected = vision.isConnected();
 
-    if (gestureEnabled.load (std::memory_order_relaxed) && vision.isConnected())
+    if (! connected)
     {
-        if (snapshot.stableGesture != gr::Gesture::unknown && snapshot.stableGesture != lastAppliedGesture)
+        lastVisionStableSlot = 0;
+        lastVisionSequence = 0;
+        lastAppliedGesture = gr::Gesture::unknown;
+    }
+    else
+    {
+        if (snapshot.sequence < lastVisionSequence)
         {
-            lastAppliedGesture = snapshot.stableGesture;
+            lastVisionStableSlot = 0;
+            lastAppliedGesture = gr::Gesture::unknown;
+        }
+        lastVisionSequence = snapshot.sequence;
+    }
+
+    if (gestureEnabled.load (std::memory_order_relaxed) && connected)
+    {
+        auto rightGesture = gr::Gesture::unknown;
+        if (snapshot.right.present)
+        {
+            if (snapshot.right.stableGesture == gr::ControlGesture::openPalm)
+                rightGesture = gr::Gesture::openPalm;
+            else if (snapshot.right.stableGesture == gr::ControlGesture::closedFist)
+                rightGesture = gr::Gesture::closedFist;
+        }
+
+        bool slotChangedByVision = false;
+        const auto stableSlot = snapshot.left.stableSlot;
+        if (snapshot.protocol >= 2
+            && snapshot.left.present
+            && stableSlot >= 1
+            && stableSlot <= 5
+            && stableSlot != lastVisionStableSlot)
+        {
+            lastVisionStableSlot = stableSlot;
+            const auto targetSlot = stableSlot - 1;
+            if (targetSlot != getSelectedSlot())
+            {
+                setSelectedSlot (targetSlot);
+                slotChangedByVision = true;
+            }
+        }
+
+        if (! snapshot.right.present)
+        {
+            lastAppliedGesture = gr::Gesture::unknown;
+        }
+        else if (slotChangedByVision)
+        {
+            // Consume any gesture that was already held while the left hand changed slots.
+            // The right hand must release/disappear or change before it can act on the new slot.
+            lastAppliedGesture = rightGesture;
+        }
+        else if (rightGesture != gr::Gesture::unknown && rightGesture != lastAppliedGesture)
+        {
+            lastAppliedGesture = rightGesture;
             const auto slotIndex = getSelectedSlot();
-            if (snapshot.stableGesture == gr::Gesture::openPalm)
+            if (rightGesture == gr::Gesture::openPalm)
                 setSlotBypassed (slotIndex, false);
-            else if (snapshot.stableGesture == gr::Gesture::closedFist)
+            else if (rightGesture == gr::Gesture::closedFist)
                 setSlotBypassed (slotIndex, true);
         }
     }
