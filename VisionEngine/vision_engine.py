@@ -14,6 +14,7 @@ import mediapipe as mp
 import numpy as np
 
 from hand_role_resolver import DetectedHand, HandRoleResolver
+from right_gesture_classifier import RIGHT_GESTURES, classify_right_gesture
 from slot_selector import SlotStabilizer, classify_slot_1_to_5
 
 MODEL_URL = (
@@ -23,7 +24,8 @@ MODEL_URL = (
 MULTICAST_ADDRESS = "239.255.71.77"
 MULTICAST_PORT = 17777
 PROTOCOL_VERSION = 2
-ALLOWED_RIGHT_GESTURES = {"Open_Palm", "Closed_Fist"}
+ALLOWED_RIGHT_GESTURES = RIGHT_GESTURES
+
 
 
 def ensure_model(model_path: Path) -> None:
@@ -60,6 +62,7 @@ class GestureStabilizer:
         return self.stable
 
 
+
 def palm_metrics(landmarks: list[list[float]]) -> tuple[float, float, float, float]:
     if len(landmarks) < 18:
         return 0.5, 0.5, 0.0, 0.5
@@ -76,6 +79,7 @@ def palm_metrics(landmarks: list[list[float]]) -> tuple[float, float, float, flo
     return float(palm_x), float(palm_y), float(palm_z), float(height)
 
 
+
 def empty_left_packet(stable_slot: int = 0) -> dict:
     return {
         "present": False,
@@ -85,6 +89,7 @@ def empty_left_packet(stable_slot: int = 0) -> dict:
         "confidence": 0.0,
         "landmarks": [],
     }
+
 
 
 def empty_right_packet(stable_gesture: str = "None") -> dict:
@@ -138,7 +143,14 @@ class GestureVisionEngine:
             min_tracking_confidence=0.5,
             canned_gestures_classifier_options=ClassifierOptions(
                 score_threshold=0.0,
-                category_allowlist=["Open_Palm", "Closed_Fist"],
+                category_allowlist=[
+                    "Open_Palm",
+                    "Closed_Fist",
+                    "Victory",
+                    "Thumb_Up",
+                    "Thumb_Down",
+                    "Pointing_Up",
+                ],
             ),
             result_callback=self._on_result,
         )
@@ -201,22 +213,28 @@ class GestureVisionEngine:
 
         right_packet = empty_right_packet(self.right_stabilizer.stable)
         if right_hand is not None:
-            raw = right_hand.raw_gesture
-            confidence = right_hand.gesture_confidence
-            stable = self.right_stabilizer.update(raw, confidence, timestamp_ms)
+            classification = classify_right_gesture(
+                right_hand.landmarks,
+                right_hand.raw_gesture,
+                right_hand.gesture_confidence,
+            )
+            stable = self.right_stabilizer.update(
+                classification.gesture, classification.confidence, timestamp_ms)
             palm_x, palm_y, palm_z, height = palm_metrics(right_hand.landmarks)
             right_packet = {
                 "present": True,
                 "handedness_confidence": right_hand.handedness_confidence,
-                "raw_gesture": raw,
+                "raw_gesture": classification.gesture,
                 "stable_gesture": stable,
-                "confidence": confidence,
+                "confidence": classification.confidence,
                 "palm_x": palm_x,
                 "palm_y": palm_y,
                 "palm_z": palm_z,
                 "height": height,
                 "landmarks": right_hand.landmarks,
             }
+        else:
+            self.right_stabilizer.update("None", 0.0, timestamp_ms)
 
         self.sequence += 1
         packet = {
@@ -261,7 +279,7 @@ class GestureVisionEngine:
         print("Gesture Vision Engine running - protocol v2")
         print("Tracking physical left and right hands independently")
         print("Left hand classifies Slot 1-5 only; Slot 6-9 remain mouse-selectable")
-        print("Right hand currently classifies Open_Palm / Closed_Fist only")
+        print("Right hand: Open Palm / Closed Fist / Victory / Thumb Up / Thumb Down / Point Right / Point Left")
         print(f"Sending multicast {MULTICAST_ADDRESS}:{MULTICAST_PORT}")
         if self.preview:
             print("Press ESC in the preview window to quit.")
@@ -300,12 +318,12 @@ class GestureVisionEngine:
                         right = packet["right"]
                         left_status = (f"L: raw {left['raw_slot']} stable {left['stable_slot']} "
                                        f"{left['confidence']:.2f}")
-                        right_status = (f"R: {right['stable_gesture']} {right['confidence']:.2f} "
-                                        f"H:{right['height']:.2f}")
+                        right_status = (f"R: raw {right['raw_gesture']} stable {right['stable_gesture']} "
+                                        f"{right['confidence']:.2f} H:{right['height']:.2f}")
                         cv2.putText(frame, left_status, (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.66, (255, 255, 255), 2, cv2.LINE_AA)
+                                    0.60, (255, 255, 255), 2, cv2.LINE_AA)
                         cv2.putText(frame, right_status, (18, 64), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.66, (255, 255, 255), 2, cv2.LINE_AA)
+                                    0.60, (255, 255, 255), 2, cv2.LINE_AA)
 
                     cv2.imshow("Gesture Vision Engine v2", frame)
                     if cv2.waitKey(1) & 0xFF == 27:
