@@ -1,5 +1,7 @@
 #pragma once
+
 #include <JuceHeader.h>
+#include <array>
 #include "PluginProcessor.h"
 
 class GestureRackAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -14,13 +16,19 @@ public:
 
 private:
     void timerCallback() override;
-    void choosePlugin();
+    void choosePluginForSelectedSlot();
+    void updateSlotButtons();
     void drawHand (juce::Graphics&, juce::Rectangle<float>, const gr::VisionSnapshot&, bool connected);
 
     GestureRackAudioProcessor& processor;
-    juce::TextButton loadButton { "LOAD VST3" };
+
+    std::array<juce::TextButton, GestureRackAudioProcessor::slotCount> slotButtons;
+    juce::TextButton loadButton { "LOAD / REPLACE" };
     juce::TextButton openButton { "OPEN PLUGIN" };
+    juce::TextButton removeButton { "REMOVE" };
+    juce::TextButton bypassButton { "ACTIVE" };
     juce::TextButton enableButton { "GESTURE ON" };
+
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GestureRackAudioProcessorEditor)

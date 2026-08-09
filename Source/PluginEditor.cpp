@@ -16,22 +16,43 @@ constexpr std::array<std::pair<int, int>, 21> handConnections {{
 GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAudioProcessor& p)
     : juce::AudioProcessorEditor (&p), processor (p)
 {
-    setSize (700, 480);
+    setSize (920, 620);
     setResizable (true, true);
-    setResizeLimits (560, 400, 1100, 800);
+    setResizeLimits (760, 520, 1400, 980);
+
+    for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
+    {
+        auto& button = slotButtons[static_cast<size_t> (i)];
+        addAndMakeVisible (button);
+        button.onClick = [this, i]
+        {
+            processor.setSelectedSlot (i);
+            updateSlotButtons();
+            repaint();
+        };
+    }
 
     addAndMakeVisible (loadButton);
     addAndMakeVisible (openButton);
+    addAndMakeVisible (removeButton);
+    addAndMakeVisible (bypassButton);
     addAndMakeVisible (enableButton);
 
-    loadButton.onClick = [this] { choosePlugin(); };
+    loadButton.onClick = [this] { choosePluginForSelectedSlot(); };
     openButton.onClick = [this] { processor.openChildEditor(); };
+    removeButton.onClick = [this] { processor.removeSlotPlugin (processor.getSelectedSlot()); };
+    bypassButton.onClick = [this]
+    {
+        const auto slot = processor.getSelectedSlot();
+        processor.setSlotBypassed (slot, ! processor.isSlotBypassed (slot));
+    };
     enableButton.onClick = [this]
     {
         processor.setGestureEnabled (! processor.isGestureEnabled());
         repaint();
     };
 
+    updateSlotButtons();
     startTimerHz (60);
 }
 
@@ -42,14 +63,57 @@ GestureRackAudioProcessorEditor::~GestureRackAudioProcessorEditor()
 
 void GestureRackAudioProcessorEditor::timerCallback()
 {
+    const auto selected = processor.getSelectedSlot();
+    const auto loaded = processor.isSlotLoaded (selected);
+    const auto bypassed = processor.isSlotBypassed (selected);
+
     enableButton.setButtonText (processor.isGestureEnabled() ? "GESTURE ON" : "GESTURE OFF");
+    bypassButton.setButtonText (bypassed ? "BYPASSED" : "ACTIVE");
+
+    openButton.setEnabled (loaded);
+    removeButton.setEnabled (loaded);
+    bypassButton.setEnabled (loaded);
+
+    updateSlotButtons();
     repaint();
 }
 
-void GestureRackAudioProcessorEditor::choosePlugin()
+void GestureRackAudioProcessorEditor::updateSlotButtons()
 {
+    const auto selected = processor.getSelectedSlot();
+
+    for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
+    {
+        auto& button = slotButtons[static_cast<size_t> (i)];
+        const auto loaded = processor.isSlotLoaded (i);
+        const auto bypassed = processor.isSlotBypassed (i);
+        auto name = processor.getSlotPluginName (i);
+
+        if (name.length() > 12)
+            name = name.substring (0, 9) + "...";
+
+        button.setButtonText (juce::String (i + 1) + "  " + (loaded ? name : "EMPTY"));
+        button.setTooltip (juce::String ("Slot ") + juce::String (i + 1) + ": "
+                           + processor.getSlotPluginName (i));
+        button.setToggleState (i == selected, juce::dontSendNotification);
+
+        const auto base = loaded ? juce::Colour::fromRGB (36, 42, 52)
+                                 : juce::Colour::fromRGB (25, 29, 36);
+        const auto selectedColour = juce::Colour::fromRGB (69, 109, 190);
+        const auto bypassColour = juce::Colour::fromRGB (104, 58, 62);
+
+        button.setColour (juce::TextButton::buttonColourId,
+                          i == selected ? selectedColour : (bypassed && loaded ? bypassColour : base));
+        button.setColour (juce::TextButton::buttonOnColourId, selectedColour);
+    }
+}
+
+void GestureRackAudioProcessorEditor::choosePluginForSelectedSlot()
+{
+    const auto targetSlot = processor.getSelectedSlot();
+
     fileChooser = std::make_unique<juce::FileChooser> (
-        "Choose a VST3 effect",
+        "Choose a VST3 effect for Slot " + juce::String (targetSlot + 1),
         juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory),
         "*.vst3");
 
@@ -57,11 +121,11 @@ void GestureRackAudioProcessorEditor::choosePlugin()
                      | juce::FileBrowserComponent::canSelectFiles
                      | juce::FileBrowserComponent::canSelectDirectories;
 
-    fileChooser->launchAsync (flags, [this] (const juce::FileChooser& chooser)
+    fileChooser->launchAsync (flags, [this, targetSlot] (const juce::FileChooser& chooser)
     {
         const auto chosen = chooser.getResult();
         if (chosen.exists())
-            processor.loadVst3FromFile (chosen);
+            processor.loadVst3FromFile (targetSlot, chosen);
     });
 }
 
@@ -72,10 +136,17 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour::fromRGB (235, 238, 242));
     g.setFont (juce::FontOptions (25.0f, juce::Font::bold));
-    g.drawText ("GESTURE RACK", 24, 18, getWidth() - 48, 32, juce::Justification::centredLeft);
+    g.drawText ("GESTURE RACK", 24, 16, getWidth() - 48, 32, juce::Justification::centredLeft);
 
-    auto visualArea = bounds.reduced (24.0f).withTrimmedTop (66.0f).withTrimmedBottom (76.0f);
-    auto left = visualArea.removeFromLeft (visualArea.getWidth() * 0.62f);
+    g.setColour (juce::Colour::fromRGB (104, 111, 126));
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.drawText ("SERIAL SIGNAL CHAIN  1  >  2  >  3  >  4  >  5  >  6  >  7  >  8  >  9",
+                24, 47, getWidth() - 48, 18, juce::Justification::centredLeft);
+
+    auto visualArea = bounds.reduced (24.0f)
+                            .withTrimmedTop (112.0f)
+                            .withTrimmedBottom (76.0f);
+    auto left = visualArea.removeFromLeft (visualArea.getWidth() * 0.58f);
     auto right = visualArea.reduced (12.0f, 0.0f);
 
     g.setColour (juce::Colour::fromRGB (22, 25, 31));
@@ -89,44 +160,62 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour::fromRGB (22, 25, 31));
     g.fillRoundedRectangle (right, 18.0f);
+    g.setColour (juce::Colour::fromRGB (45, 50, 61));
+    g.drawRoundedRectangle (right, 18.0f, 1.0f);
 
-    const auto bypassed = processor.isGestureBypassed();
-    const auto gestureText = connected ? gr::gestureToString (snapshot.stableGesture) : "VISION OFFLINE";
-
-    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.setColour (juce::Colour::fromRGB (130, 137, 151));
-    g.drawText ("GESTURE", right.toNearestInt().withTrimmedLeft (20).withHeight (28), juce::Justification::centredLeft);
-
-    auto statusLine = right.toNearestInt().withTrimmedLeft (20).withTrimmedRight (20).withTrimmedTop (34).withHeight (42);
-    g.setFont (juce::FontOptions (23.0f, juce::Font::bold));
-    g.setColour (connected ? juce::Colour::fromRGB (238, 241, 245) : juce::Colour::fromRGB (120, 126, 138));
-    g.drawText (gestureText, statusLine, juce::Justification::centredLeft);
-
-    auto stateRect = right.toNearestInt().withTrimmedLeft (20).withTrimmedRight (20).withTrimmedTop (105).withHeight (72);
+    const auto selected = processor.getSelectedSlot();
+    const auto loaded = processor.isSlotLoaded (selected);
+    const auto bypassed = processor.isSlotBypassed (selected);
     const auto stateColour = bypassed ? juce::Colour::fromRGB (235, 92, 92)
                                       : juce::Colour::fromRGB (92, 220, 155);
-    g.setColour (stateColour.withAlpha (0.13f));
-    g.fillRoundedRectangle (stateRect.toFloat(), 12.0f);
-    g.setColour (stateColour);
-    g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-    g.drawText (bypassed ? "BYPASSED" : "ACTIVE", stateRect, juce::Justification::centred);
 
-    auto pluginLabel = right.toNearestInt().withTrimmedLeft (20).withTrimmedRight (20).withTrimmedTop (205).withHeight (24);
+    auto panel = right.toNearestInt().reduced (20);
+
     g.setColour (juce::Colour::fromRGB (130, 137, 151));
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    g.drawText ("TARGET", pluginLabel, juce::Justification::centredLeft);
+    g.drawText ("SELECTED SLOT", panel.removeFromTop (22), juce::Justification::centredLeft);
 
-    auto pluginName = pluginLabel.translated (0, 28).withHeight (52);
+    g.setColour (juce::Colour::fromRGB (238, 241, 245));
+    g.setFont (juce::FontOptions (30.0f, juce::Font::bold));
+    g.drawText ("SLOT " + juce::String (selected + 1), panel.removeFromTop (42), juce::Justification::centredLeft);
+
+    panel.removeFromTop (8);
+    g.setColour (juce::Colour::fromRGB (130, 137, 151));
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText ("PLUGIN", panel.removeFromTop (22), juce::Justification::centredLeft);
+
     g.setColour (juce::Colour::fromRGB (230, 233, 238));
     g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
-    g.drawFittedText (processor.getLoadedPluginName(), pluginName, juce::Justification::centredLeft, 2);
+    g.drawFittedText (processor.getSlotPluginName (selected), panel.removeFromTop (54),
+                      juce::Justification::centredLeft, 2);
 
-    if (const auto error = processor.getLastError(); error.isNotEmpty())
+    panel.removeFromTop (8);
+    auto stateRect = panel.removeFromTop (64);
+    g.setColour ((loaded ? stateColour : juce::Colour::fromRGB (100, 106, 118)).withAlpha (0.13f));
+    g.fillRoundedRectangle (stateRect.toFloat(), 12.0f);
+    g.setColour (loaded ? stateColour : juce::Colour::fromRGB (120, 126, 138));
+    g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+    g.drawText (loaded ? (bypassed ? "BYPASSED" : "ACTIVE") : "EMPTY SLOT",
+                stateRect, juce::Justification::centred);
+
+    panel.removeFromTop (16);
+    g.setColour (juce::Colour::fromRGB (130, 137, 151));
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText ("CURRENT GESTURE", panel.removeFromTop (22), juce::Justification::centredLeft);
+
+    g.setColour (connected ? juce::Colour::fromRGB (230, 233, 238)
+                           : juce::Colour::fromRGB (120, 126, 138));
+    g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
+    const auto gestureText = connected ? gr::gestureToString (snapshot.stableGesture) : "VISION OFFLINE";
+    g.drawText (gestureText, panel.removeFromTop (34), juce::Justification::centredLeft);
+
+    if (const auto error = processor.getSlotLastError (selected); error.isNotEmpty())
     {
-        auto errorRect = getLocalBounds().reduced (24).removeFromBottom (60);
+        auto errorRect = getLocalBounds().reduced (24).removeFromBottom (62);
         g.setColour (juce::Colour::fromRGB (235, 92, 92));
         g.setFont (juce::FontOptions (12.0f));
-        g.drawFittedText (error, errorRect, juce::Justification::centredLeft, 2);
+        g.drawFittedText ("Slot " + juce::String (selected + 1) + ": " + error,
+                          errorRect, juce::Justification::centredLeft, 2);
     }
 }
 
@@ -175,21 +264,38 @@ void GestureRackAudioProcessorEditor::drawHand (juce::Graphics& g,
     for (const auto [a, b] : handConnections)
         g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 3.0f);
 
-    for (const auto& p : points)
+    for (const auto& point : points)
     {
         g.setColour (activeColour.withAlpha (0.25f));
-        g.fillEllipse (p.x - 6.0f, p.y - 6.0f, 12.0f, 12.0f);
+        g.fillEllipse (point.x - 6.0f, point.y - 6.0f, 12.0f, 12.0f);
         g.setColour (activeColour);
-        g.fillEllipse (p.x - 3.0f, p.y - 3.0f, 6.0f, 6.0f);
+        g.fillEllipse (point.x - 3.0f, point.y - 3.0f, 6.0f, 6.0f);
     }
 }
 
 void GestureRackAudioProcessorEditor::resized()
 {
+    auto slotRow = getLocalBounds().reduced (24).withTrimmedTop (68).removeFromTop (42);
+    const auto gap = 5;
+    const auto totalGap = gap * (GestureRackAudioProcessor::slotCount - 1);
+    const auto slotWidth = juce::jmax (1, (slotRow.getWidth() - totalGap) / GestureRackAudioProcessor::slotCount);
+
+    for (auto& button : slotButtons)
+    {
+        button.setBounds (slotRow.removeFromLeft (slotWidth));
+        slotRow.removeFromLeft (gap);
+    }
+
     auto bottom = getLocalBounds().reduced (24).removeFromBottom (44);
-    loadButton.setBounds (bottom.removeFromLeft (150));
-    bottom.removeFromLeft (10);
-    openButton.setBounds (bottom.removeFromLeft (150));
-    bottom.removeFromLeft (10);
-    enableButton.setBounds (bottom.removeFromLeft (150));
+    const auto buttonWidth = 145;
+
+    loadButton.setBounds (bottom.removeFromLeft (buttonWidth));
+    bottom.removeFromLeft (8);
+    openButton.setBounds (bottom.removeFromLeft (buttonWidth));
+    bottom.removeFromLeft (8);
+    removeButton.setBounds (bottom.removeFromLeft (110));
+    bottom.removeFromLeft (8);
+    bypassButton.setBounds (bottom.removeFromLeft (120));
+    bottom.removeFromLeft (8);
+    enableButton.setBounds (bottom.removeFromLeft (130));
 }
