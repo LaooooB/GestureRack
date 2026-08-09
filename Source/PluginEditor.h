@@ -19,7 +19,12 @@ private:
     void timerCallback() override;
     void choosePluginForSelectedSlot();
     void updateSlotButtons();
-    void drawHand (juce::Graphics&, juce::Rectangle<float>, const gr::VisionSnapshot&, bool connected);
+    void drawHand (juce::Graphics&,
+                   juce::Rectangle<float>,
+                   const gr::HandSnapshot&,
+                   bool connected,
+                   juce::Colour colour,
+                   const juce::String& label);
 
     GestureRackAudioProcessor& processor;
 
