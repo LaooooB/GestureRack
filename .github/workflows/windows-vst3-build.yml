@@ -14,6 +14,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Run vision regression tests
+        working-directory: VisionEngine
+        run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py
+
       - name: Configure JUCE project
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=ON
 
