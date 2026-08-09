@@ -30,21 +30,20 @@ class RoleTrack:
 
 
 class HandRoleResolver:
-    """Assign detections to physical left/right roles without frame-to-frame swapping.
-
-    MediaPipe handedness is the primary cue. Wrist trajectory is a continuity cue,
-    especially when hands cross and handedness confidence briefly drops. The optional
-    swap flag exists because camera mirroring conventions differ between pipelines.
-    """
+    """Assign detections to physical left/right roles with trajectory hysteresis."""
 
     def __init__(self, *, swap_handedness: bool = False, ttl_ms: int = 420,
-                 max_track_distance: float = 0.42, ambiguous_margin: float = 0.30):
+                 max_track_distance: float = 0.42, ambiguous_margin: float = 0.30,
+                 role_switch_hold_ms: int = 140):
         self.swap_handedness = swap_handedness
         self.ttl_ms = ttl_ms
         self.max_track_distance = max_track_distance
         self.ambiguous_margin = ambiguous_margin
+        self.role_switch_hold_ms = role_switch_hold_ms
         self.left_track = RoleTrack()
         self.right_track = RoleTrack()
+        self._pending_assignment: Optional[tuple[int, int]] = None
+        self._pending_since_ms = 0
 
     def _normalized_label(self, label: str) -> str:
         value = (label or "").strip().lower()
@@ -90,6 +89,40 @@ class HandRoleResolver:
                    + self._distance(hands[0].wrist, self.right_track.wrist))
         return (0, 1) if direct <= crossed else (1, 0)
 
+    def _held_assignment(self, scored: tuple[int, int], trajectory: tuple[int, int],
+                         now_ms: int) -> tuple[int, int]:
+        if scored == trajectory:
+            self._pending_assignment = None
+            self._pending_since_ms = 0
+            return scored
+
+        if self._pending_assignment != scored:
+            self._pending_assignment = scored
+            self._pending_since_ms = now_ms
+            return trajectory
+
+        if now_ms - self._pending_since_ms < self.role_switch_hold_ms:
+            return trajectory
+
+        self._pending_assignment = None
+        self._pending_since_ms = 0
+        return scored
+
+    def _single_track_role(self, hand: DetectedHand, now_ms: int) -> Optional[str]:
+        left_fresh = self.left_track.is_fresh(now_ms, self.ttl_ms)
+        right_fresh = self.right_track.is_fresh(now_ms, self.ttl_ms)
+        left_distance = (self._distance(hand.wrist, self.left_track.wrist)
+                         if left_fresh and self.left_track.wrist is not None else 999.0)
+        right_distance = (self._distance(hand.wrist, self.right_track.wrist)
+                          if right_fresh and self.right_track.wrist is not None else 999.0)
+
+        close_threshold = 0.20
+        if left_distance <= close_threshold and left_distance + 0.05 < right_distance:
+            return "left"
+        if right_distance <= close_threshold and right_distance + 0.05 < left_distance:
+            return "right"
+        return None
+
     def resolve(self, hands: list[DetectedHand], now_ms: int) -> tuple[Optional[DetectedHand], Optional[DetectedHand]]:
         hands = hands[:2]
         if not hands:
@@ -100,38 +133,47 @@ class HandRoleResolver:
 
         if len(hands) == 1:
             hand = hands[0]
-            left_score = self._score(hand, "left", now_ms)
-            right_score = self._score(hand, "right", now_ms)
-            if left_score > right_score:
+            continuity_role = self._single_track_role(hand, now_ms)
+            if continuity_role == "left":
                 left = hand
-            elif right_score > left_score:
+            elif continuity_role == "right":
                 right = hand
             else:
-                label = self._normalized_label(hand.handedness_label)
-                if label == "left":
+                left_score = self._score(hand, "left", now_ms)
+                right_score = self._score(hand, "right", now_ms)
+                if left_score > right_score:
                     left = hand
-                elif label == "right":
+                elif right_score > left_score:
                     right = hand
-                elif self.left_track.is_fresh(now_ms, self.ttl_ms) and not self.right_track.is_fresh(now_ms, self.ttl_ms):
-                    left = hand
                 else:
-                    right = hand
+                    label = self._normalized_label(hand.handedness_label)
+                    if label == "left":
+                        left = hand
+                    elif label == "right":
+                        right = hand
+                    elif self.left_track.is_fresh(now_ms, self.ttl_ms) and not self.right_track.is_fresh(now_ms, self.ttl_ms):
+                        left = hand
+                    else:
+                        right = hand
         else:
             score_direct = self._score(hands[0], "left", now_ms) + self._score(hands[1], "right", now_ms)
             score_crossed = self._score(hands[1], "left", now_ms) + self._score(hands[0], "right", now_ms)
+            scored = (0, 1) if score_direct >= score_crossed else (1, 0)
+            trajectory = self._trajectory_preference(hands, now_ms)
 
-            if abs(score_direct - score_crossed) < self.ambiguous_margin:
-                preference = self._trajectory_preference(hands, now_ms)
-                if preference is not None:
-                    left, right = hands[preference[0]], hands[preference[1]]
-                elif score_direct >= score_crossed:
-                    left, right = hands[0], hands[1]
+            if trajectory is not None:
+                if abs(score_direct - score_crossed) < self.ambiguous_margin:
+                    assignment = trajectory
+                    self._pending_assignment = None
+                    self._pending_since_ms = 0
                 else:
-                    left, right = hands[1], hands[0]
-            elif score_direct >= score_crossed:
-                left, right = hands[0], hands[1]
+                    assignment = self._held_assignment(scored, trajectory, now_ms)
             else:
-                left, right = hands[1], hands[0]
+                assignment = scored
+                self._pending_assignment = None
+                self._pending_since_ms = 0
+
+            left, right = hands[assignment[0]], hands[assignment[1]]
 
         if left is not None:
             self.left_track.wrist = left.wrist
