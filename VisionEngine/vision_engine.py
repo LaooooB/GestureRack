@@ -6,13 +6,13 @@ import socket
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import mediapipe as mp
 import numpy as np
 
+from gesture_stabilizer import GestureStabilizer
 from hand_role_resolver import DetectedHand, HandRoleResolver
 from right_gesture_classifier import RIGHT_GESTURES, classify_right_gesture
 from slot_selector import SlotStabilizer, classify_slot_1_to_5
@@ -27,40 +27,12 @@ PROTOCOL_VERSION = 2
 ALLOWED_RIGHT_GESTURES = RIGHT_GESTURES
 
 
-
 def ensure_model(model_path: Path) -> None:
     if model_path.exists():
         return
     model_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"Downloading MediaPipe gesture model to: {model_path}")
     urllib.request.urlretrieve(MODEL_URL, model_path)
-
-
-@dataclass
-class GestureStabilizer:
-    hold_ms: int = 120
-    min_confidence: float = 0.80
-    stable: str = "None"
-    candidate: str = "None"
-    candidate_since_ms: int = 0
-
-    def update(self, raw: str, confidence: float, now_ms: int) -> str:
-        valid = raw in ALLOWED_RIGHT_GESTURES and confidence >= self.min_confidence
-        if not valid:
-            self.candidate = "None"
-            self.candidate_since_ms = 0
-            return self.stable
-
-        if raw != self.candidate:
-            self.candidate = raw
-            self.candidate_since_ms = now_ms
-            return self.stable
-
-        if self.candidate_since_ms and now_ms - self.candidate_since_ms >= self.hold_ms:
-            self.stable = raw
-
-        return self.stable
-
 
 
 def palm_metrics(landmarks: list[list[float]]) -> tuple[float, float, float, float]:
@@ -79,7 +51,6 @@ def palm_metrics(landmarks: list[list[float]]) -> tuple[float, float, float, flo
     return float(palm_x), float(palm_y), float(palm_z), float(height)
 
 
-
 def empty_left_packet(stable_slot: int = 0) -> dict:
     return {
         "present": False,
@@ -89,7 +60,6 @@ def empty_left_packet(stable_slot: int = 0) -> dict:
         "confidence": 0.0,
         "landmarks": [],
     }
-
 
 
 def empty_right_packet(stable_gesture: str = "None") -> dict:
@@ -109,7 +79,7 @@ def empty_right_packet(stable_gesture: str = "None") -> dict:
 
 class GestureVisionEngine:
     def __init__(self, model_path: Path, camera_index: int, width: int, height: int,
-                 confidence: float, hold_ms: int, preview: bool,
+                 confidence: float, hold_ms: int, release_ms: int, preview: bool,
                  swap_handedness: bool, slot_confidence: float,
                  slot_hold_ms: int):
         self.model_path = model_path
@@ -117,7 +87,12 @@ class GestureVisionEngine:
         self.width = width
         self.height = height
         self.preview = preview
-        self.right_stabilizer = GestureStabilizer(hold_ms=hold_ms, min_confidence=confidence)
+        self.right_stabilizer = GestureStabilizer(
+            allowed_gestures=set(ALLOWED_RIGHT_GESTURES),
+            hold_ms=hold_ms,
+            release_ms=release_ms,
+            min_confidence=confidence,
+        )
         self.left_stabilizer = SlotStabilizer(hold_ms=slot_hold_ms, min_confidence=slot_confidence)
         self.role_resolver = HandRoleResolver(swap_handedness=swap_handedness)
         self.sequence = 0
@@ -211,7 +186,6 @@ class GestureVisionEngine:
         else:
             self.left_stabilizer.update(0, 0.0, timestamp_ms)
 
-        right_packet = empty_right_packet(self.right_stabilizer.stable)
         if right_hand is not None:
             classification = classify_right_gesture(
                 right_hand.landmarks,
@@ -234,7 +208,8 @@ class GestureVisionEngine:
                 "landmarks": right_hand.landmarks,
             }
         else:
-            self.right_stabilizer.update("None", 0.0, timestamp_ms)
+            stable = self.right_stabilizer.update("None", 0.0, timestamp_ms)
+            right_packet = empty_right_packet(stable)
 
         self.sequence += 1
         packet = {
@@ -343,6 +318,7 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--confidence", type=float, default=0.80)
     parser.add_argument("--hold-ms", type=int, default=120)
+    parser.add_argument("--release-ms", type=int, default=100)
     parser.add_argument("--slot-confidence", type=float, default=0.80)
     parser.add_argument("--slot-hold-ms", type=int, default=150)
     parser.add_argument("--preview", action="store_true")
@@ -366,6 +342,7 @@ def main() -> None:
         height=args.height,
         confidence=args.confidence,
         hold_ms=args.hold_ms,
+        release_ms=args.release_ms,
         preview=args.preview,
         swap_handedness=args.swap_handedness,
         slot_confidence=args.slot_confidence,
