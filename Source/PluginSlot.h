@@ -3,7 +3,9 @@
 #include <JuceHeader.h>
 #include <atomic>
 #include <optional>
+#include <vector>
 #include "GestureBypassWrapper.h"
+#include "GestureBinding.h"
 
 namespace gr
 {
@@ -39,12 +41,23 @@ public:
 
     std::atomic<bool>& getBypassState() noexcept { return requestedBypass; }
 
+    std::vector<GestureBinding> getMappings() const;
+    void addMapping (const GestureBinding& binding);
+    bool updateMapping (const GestureBinding& binding);
+    bool removeMapping (const juce::Uuid& id);
+    void clearChildParameterMappings();
+    void clearAllMappings();
+    int getMappingCount (ControlGesture gesture) const;
+
 private:
     int slotIndex = 0;
     std::optional<juce::PluginDescription> description;
     juce::AudioProcessorGraph::Node::Ptr graphNode;
     std::atomic<bool> requestedBypass { false };
     juce::String lastError;
+
+    mutable juce::SpinLock mappingsLock;
+    std::vector<GestureBinding> mappings;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginSlot)
 };

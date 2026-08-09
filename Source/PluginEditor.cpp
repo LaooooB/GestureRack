@@ -14,16 +14,19 @@ constexpr std::array<std::pair<int, int>, 21> handConnections {{
 }
 
 GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAudioProcessor& p)
-    : juce::AudioProcessorEditor (&p), processor (p)
+    : juce::AudioProcessorEditor (&p),
+      processor (p),
+      parameterInspector (p)
 {
-    setSize (920, 620);
+    setSize (1280, 760);
     setResizable (true, true);
-    setResizeLimits (760, 520, 1400, 980);
+    setResizeLimits (1000, 640, 1800, 1100);
 
     for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
     {
         auto& button = slotButtons[static_cast<size_t> (i)];
         addAndMakeVisible (button);
+        button.setClickingTogglesState (false);
         button.onClick = [this, i]
         {
             processor.setSelectedSlot (i);
@@ -37,6 +40,7 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     addAndMakeVisible (removeButton);
     addAndMakeVisible (bypassButton);
     addAndMakeVisible (enableButton);
+    addAndMakeVisible (parameterInspector);
 
     loadButton.onClick = [this] { choosePluginForSelectedSlot(); };
     openButton.onClick = [this] { processor.openChildEditor(); };
@@ -53,7 +57,7 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     };
 
     updateSlotButtons();
-    startTimerHz (60);
+    startTimerHz (30);
 }
 
 GestureRackAudioProcessorEditor::~GestureRackAudioProcessorEditor()
@@ -87,14 +91,20 @@ void GestureRackAudioProcessorEditor::updateSlotButtons()
         auto& button = slotButtons[static_cast<size_t> (i)];
         const auto loaded = processor.isSlotLoaded (i);
         const auto bypassed = processor.isSlotBypassed (i);
+        const auto mappingCount = processor.getSlotMappingCount (i);
         auto name = processor.getSlotPluginName (i);
 
-        if (name.length() > 12)
-            name = name.substring (0, 9) + "...";
+        if (name.length() > 11)
+            name = name.substring (0, 8) + "...";
 
-        button.setButtonText (juce::String (i + 1) + "  " + (loaded ? name : "EMPTY"));
-        button.setTooltip (juce::String ("Slot ") + juce::String (i + 1) + ": "
-                           + processor.getSlotPluginName (i));
+        auto text = juce::String (i + 1) + "  " + (loaded ? name : "EMPTY");
+        if (mappingCount > 0)
+            text += "  [" + juce::String (mappingCount) + "]";
+
+        button.setButtonText (text);
+        button.setTooltip ("Slot " + juce::String (i + 1) + ": "
+                           + processor.getSlotPluginName (i)
+                           + " | mappings: " + juce::String (mappingCount));
         button.setToggleState (i == selected, juce::dontSendNotification);
 
         const auto base = loaded ? juce::Colour::fromRGB (36, 42, 52)
@@ -131,37 +141,34 @@ void GestureRackAudioProcessorEditor::choosePluginForSelectedSlot()
 
 void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    const auto bounds = getLocalBounds().toFloat();
     g.fillAll (juce::Colour::fromRGB (12, 14, 18));
 
     g.setColour (juce::Colour::fromRGB (235, 238, 242));
     g.setFont (juce::FontOptions (25.0f, juce::Font::bold));
-    g.drawText ("GESTURE RACK", 24, 16, getWidth() - 48, 32, juce::Justification::centredLeft);
+    g.drawText ("GESTURE RACK", 24, 14, getWidth() - 48, 32, juce::Justification::centredLeft);
 
     g.setColour (juce::Colour::fromRGB (104, 111, 126));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     g.drawText ("SERIAL SIGNAL CHAIN  1  >  2  >  3  >  4  >  5  >  6  >  7  >  8  >  9",
-                24, 47, getWidth() - 48, 18, juce::Justification::centredLeft);
+                24, 45, getWidth() - 48, 18, juce::Justification::centredLeft);
 
-    auto visualArea = bounds.reduced (24.0f)
-                            .withTrimmedTop (112.0f)
-                            .withTrimmedBottom (76.0f);
-    auto left = visualArea.removeFromLeft (visualArea.getWidth() * 0.58f);
-    auto right = visualArea.reduced (12.0f, 0.0f);
+    auto content = getLocalBounds().reduced (24);
+    content.removeFromTop (112);
+    content.removeFromBottom (58);
+
+    auto left = content.removeFromLeft (juce::jlimit (270, 380, content.getWidth() * 30 / 100));
+    content.removeFromLeft (12);
 
     g.setColour (juce::Colour::fromRGB (22, 25, 31));
-    g.fillRoundedRectangle (left, 18.0f);
+    g.fillRoundedRectangle (left.toFloat(), 14.0f);
     g.setColour (juce::Colour::fromRGB (45, 50, 61));
-    g.drawRoundedRectangle (left, 18.0f, 1.0f);
+    g.drawRoundedRectangle (left.toFloat(), 14.0f, 1.0f);
 
     const auto snapshot = processor.getVisionSnapshot();
     const auto connected = processor.isVisionConnected();
-    drawHand (g, left.reduced (24.0f), snapshot, connected);
-
-    g.setColour (juce::Colour::fromRGB (22, 25, 31));
-    g.fillRoundedRectangle (right, 18.0f);
-    g.setColour (juce::Colour::fromRGB (45, 50, 61));
-    g.drawRoundedRectangle (right, 18.0f, 1.0f);
+    auto handArea = left.reduced (18);
+    auto infoArea = handArea.removeFromBottom (152);
+    drawHand (g, handArea.toFloat(), snapshot, connected);
 
     const auto selected = processor.getSelectedSlot();
     const auto loaded = processor.isSlotLoaded (selected);
@@ -169,53 +176,40 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     const auto stateColour = bypassed ? juce::Colour::fromRGB (235, 92, 92)
                                       : juce::Colour::fromRGB (92, 220, 155);
 
-    auto panel = right.toNearestInt().reduced (20);
-
-    g.setColour (juce::Colour::fromRGB (130, 137, 151));
-    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    g.drawText ("SELECTED SLOT", panel.removeFromTop (22), juce::Justification::centredLeft);
+    g.setColour (juce::Colour::fromRGB (128, 136, 151));
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText ("SELECTED SLOT", infoArea.removeFromTop (18), juce::Justification::centredLeft);
 
     g.setColour (juce::Colour::fromRGB (238, 241, 245));
-    g.setFont (juce::FontOptions (30.0f, juce::Font::bold));
-    g.drawText ("SLOT " + juce::String (selected + 1), panel.removeFromTop (42), juce::Justification::centredLeft);
+    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.drawText ("SLOT " + juce::String (selected + 1), infoArea.removeFromTop (30), juce::Justification::centredLeft);
 
-    panel.removeFromTop (8);
-    g.setColour (juce::Colour::fromRGB (130, 137, 151));
-    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    g.drawText ("PLUGIN", panel.removeFromTop (22), juce::Justification::centredLeft);
+    g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+    g.drawFittedText (processor.getSlotPluginName (selected), infoArea.removeFromTop (32),
+                      juce::Justification::centredLeft, 1);
 
-    g.setColour (juce::Colour::fromRGB (230, 233, 238));
-    g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
-    g.drawFittedText (processor.getSlotPluginName (selected), panel.removeFromTop (54),
-                      juce::Justification::centredLeft, 2);
-
-    panel.removeFromTop (8);
-    auto stateRect = panel.removeFromTop (64);
+    auto stateRect = infoArea.removeFromTop (36).reduced (0, 3);
     g.setColour ((loaded ? stateColour : juce::Colour::fromRGB (100, 106, 118)).withAlpha (0.13f));
-    g.fillRoundedRectangle (stateRect.toFloat(), 12.0f);
+    g.fillRoundedRectangle (stateRect.toFloat(), 8.0f);
     g.setColour (loaded ? stateColour : juce::Colour::fromRGB (120, 126, 138));
-    g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     g.drawText (loaded ? (bypassed ? "BYPASSED" : "ACTIVE") : "EMPTY SLOT",
                 stateRect, juce::Justification::centred);
 
-    panel.removeFromTop (16);
-    g.setColour (juce::Colour::fromRGB (130, 137, 151));
-    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    g.drawText ("CURRENT GESTURE", panel.removeFromTop (22), juce::Justification::centredLeft);
-
-    g.setColour (connected ? juce::Colour::fromRGB (230, 233, 238)
-                           : juce::Colour::fromRGB (120, 126, 138));
-    g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
+    g.setColour (juce::Colour::fromRGB (118, 125, 139));
+    g.setFont (juce::FontOptions (10.0f));
     const auto gestureText = connected ? gr::gestureToString (snapshot.stableGesture) : "VISION OFFLINE";
-    g.drawText (gestureText, panel.removeFromTop (34), juce::Justification::centredLeft);
+    g.drawFittedText ("VISION: " + gestureText
+                      + "   |   MAPPINGS: " + juce::String (processor.getSlotMappingCount (selected)),
+                      infoArea, juce::Justification::centredLeft, 2);
 
     if (const auto error = processor.getSlotLastError (selected); error.isNotEmpty())
     {
-        auto errorRect = getLocalBounds().reduced (24).removeFromBottom (62);
+        auto errorRect = getLocalBounds().reduced (24).removeFromBottom (22);
         g.setColour (juce::Colour::fromRGB (235, 92, 92));
-        g.setFont (juce::FontOptions (12.0f));
+        g.setFont (juce::FontOptions (11.0f));
         g.drawFittedText ("Slot " + juce::String (selected + 1) + ": " + error,
-                          errorRect, juce::Justification::centredLeft, 2);
+                          errorRect, juce::Justification::centredLeft, 1);
     }
 }
 
@@ -231,7 +225,7 @@ void GestureRackAudioProcessorEditor::drawHand (juce::Graphics& g,
     if (! connected || ! snapshot.handPresent)
     {
         g.setColour (juce::Colour::fromRGB (88, 94, 106));
-        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         g.drawText (connected ? "SHOW YOUR HAND" : "START VISION ENGINE",
                     area.toNearestInt(), juce::Justification::centred);
         return;
@@ -255,28 +249,28 @@ void GestureRackAudioProcessorEditor::drawHand (juce::Graphics& g,
     palmCentre /= 5.0f;
 
     g.setColour (activeColour.withAlpha (0.08f + 0.08f * pulse));
-    g.fillEllipse (palmCentre.x - 48.0f - pulse * 8.0f,
-                   palmCentre.y - 48.0f - pulse * 8.0f,
-                   96.0f + pulse * 16.0f,
-                   96.0f + pulse * 16.0f);
+    g.fillEllipse (palmCentre.x - 38.0f - pulse * 6.0f,
+                   palmCentre.y - 38.0f - pulse * 6.0f,
+                   76.0f + pulse * 12.0f,
+                   76.0f + pulse * 12.0f);
 
     g.setColour (activeColour.withAlpha (0.85f));
     for (const auto [a, b] : handConnections)
-        g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 3.0f);
+        g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 2.5f);
 
     for (const auto& point : points)
     {
         g.setColour (activeColour.withAlpha (0.25f));
-        g.fillEllipse (point.x - 6.0f, point.y - 6.0f, 12.0f, 12.0f);
+        g.fillEllipse (point.x - 5.0f, point.y - 5.0f, 10.0f, 10.0f);
         g.setColour (activeColour);
-        g.fillEllipse (point.x - 3.0f, point.y - 3.0f, 6.0f, 6.0f);
+        g.fillEllipse (point.x - 2.5f, point.y - 2.5f, 5.0f, 5.0f);
     }
 }
 
 void GestureRackAudioProcessorEditor::resized()
 {
-    auto slotRow = getLocalBounds().reduced (24).withTrimmedTop (68).removeFromTop (42);
-    const auto gap = 5;
+    auto slotRow = getLocalBounds().reduced (24).withTrimmedTop (66).removeFromTop (42);
+    constexpr auto gap = 5;
     const auto totalGap = gap * (GestureRackAudioProcessor::slotCount - 1);
     const auto slotWidth = juce::jmax (1, (slotRow.getWidth() - totalGap) / GestureRackAudioProcessor::slotCount);
 
@@ -286,16 +280,21 @@ void GestureRackAudioProcessorEditor::resized()
         slotRow.removeFromLeft (gap);
     }
 
-    auto bottom = getLocalBounds().reduced (24).removeFromBottom (44);
-    const auto buttonWidth = 145;
+    auto content = getLocalBounds().reduced (24);
+    content.removeFromTop (112);
+    content.removeFromBottom (58);
+    content.removeFromLeft (juce::jlimit (270, 380, content.getWidth() * 30 / 100));
+    content.removeFromLeft (12);
+    parameterInspector.setBounds (content);
 
-    loadButton.setBounds (bottom.removeFromLeft (buttonWidth));
+    auto bottom = getLocalBounds().reduced (24).removeFromBottom (42);
+    loadButton.setBounds (bottom.removeFromLeft (145));
     bottom.removeFromLeft (8);
-    openButton.setBounds (bottom.removeFromLeft (buttonWidth));
+    openButton.setBounds (bottom.removeFromLeft (135));
     bottom.removeFromLeft (8);
-    removeButton.setBounds (bottom.removeFromLeft (110));
+    removeButton.setBounds (bottom.removeFromLeft (96));
     bottom.removeFromLeft (8);
-    bypassButton.setBounds (bottom.removeFromLeft (120));
+    bypassButton.setBounds (bottom.removeFromLeft (110));
     bottom.removeFromLeft (8);
-    enableButton.setBounds (bottom.removeFromLeft (130));
+    enableButton.setBounds (bottom.removeFromLeft (120));
 }

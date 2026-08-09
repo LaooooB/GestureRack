@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include <array>
 #include "PluginProcessor.h"
+#include "ParameterInspector.h"
 
 class GestureRackAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                               private juce::Timer
@@ -29,6 +30,7 @@ private:
     juce::TextButton bypassButton { "ACTIVE" };
     juce::TextButton enableButton { "GESTURE ON" };
 
+    gr::ParameterInspector parameterInspector;
     std::unique_ptr<juce::FileChooser> fileChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GestureRackAudioProcessorEditor)
