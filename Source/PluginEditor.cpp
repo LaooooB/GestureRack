@@ -214,7 +214,7 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour::fromRGB (118, 125, 139));
     g.setFont (juce::FontOptions (9.5f));
-    const auto leftStatus = connected
+    const juce::String leftStatus = connected
         ? (snapshot.left.present ? "LEFT TRACKED" : "LEFT NOT VISIBLE")
         : "VISION OFFLINE";
     const auto rightGesture = snapshot.right.present
