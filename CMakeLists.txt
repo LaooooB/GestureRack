@@ -57,6 +57,8 @@ target_sources(GestureRack PRIVATE
     Source/GestureBinding.cpp
     Source/GestureMappingEngine.h
     Source/GestureMappingEngine.cpp
+    Source/RightGestureRuntime.h
+    Source/RightGestureRuntime.cpp
     Source/ParameterLearnManager.h
     Source/ParameterLearnManager.cpp
     Source/ParameterInspector.h

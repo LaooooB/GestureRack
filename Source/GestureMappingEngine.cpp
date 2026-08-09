@@ -48,7 +48,7 @@ juce::String GestureMappingEngine::getParameterStableId (const juce::AudioProces
     if (const auto* hosted = dynamic_cast<const juce::HostedAudioProcessorParameter*> (&parameter))
         return hosted->getParameterID();
 
-    return juce::LegacyAudioParameter::getParamID (&parameter, false);
+    return {};
 }
 
 ParameterDescriptor GestureMappingEngine::describeParameter (const juce::AudioProcessorParameter& parameter) const
