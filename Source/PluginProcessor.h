@@ -38,7 +38,7 @@ public:
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    const juce::String getProgramName (int) const override { return {}; }
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock&) override;
@@ -64,6 +64,7 @@ public:
     juce::String getLastError() const { return getSlotLastError (getSelectedSlot()); }
 
     gr::VisionSnapshot getVisionSnapshot() const { return vision.getSnapshot(); }
+    gr::DualHandVisionSnapshot getDualHandVisionSnapshot() const { return vision.getDualHandSnapshot(); }
     bool isVisionConnected() const { return vision.isConnected(); }
     bool isGestureEnabled() const noexcept { return gestureEnabled.load (std::memory_order_relaxed); }
     void setGestureEnabled (bool enabled) noexcept { gestureEnabled.store (enabled, std::memory_order_relaxed); }
