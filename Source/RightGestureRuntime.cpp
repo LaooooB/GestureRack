@@ -5,6 +5,7 @@ namespace gr
 void RightGestureRuntime::reset() noexcept
 {
     armed = true;
+    missingFrameCount = 0;
     currentGesture = ControlGesture::unknown;
     previousGesture = ControlGesture::unknown;
     blockedGesture = ControlGesture::unknown;
@@ -32,11 +33,15 @@ RightGestureRuntimeFrame RightGestureRuntime::update (bool handPresent,
 
     if (! handPresent)
     {
-        reset();
-        frame.armed = true;
+        currentGesture = ControlGesture::unknown;
+        ++missingFrameCount;
+        if (missingFrameCount >= missingFramesBeforeReset)
+            reset();
+        frame.armed = armed;
         return frame;
     }
 
+    missingFrameCount = 0;
     currentGesture = stableGesture;
 
     if (! armed)
@@ -89,6 +94,7 @@ RightGestureRuntimeFrame RightGestureRuntime::update (bool handPresent,
 void RightGestureRuntime::restoreArmingState (bool shouldBeArmed, ControlGesture blocked) noexcept
 {
     armed = shouldBeArmed;
+    missingFrameCount = 0;
     blockedGesture = shouldBeArmed ? ControlGesture::unknown : blocked;
     currentGesture = ControlGesture::unknown;
     previousGesture = shouldBeArmed ? ControlGesture::unknown : blocked;
