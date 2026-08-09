@@ -140,6 +140,8 @@ private:
     std::atomic<bool> gestureEnabled { true };
     std::atomic<int> selectedSlot { 0 };
     gr::Gesture lastAppliedGesture = gr::Gesture::unknown;
+    int lastVisionStableSlot = 0;
+    int64_t lastVisionSequence = 0;
 
     juce::AudioProcessorGraph graph;
     gr::RackGraphManager::SlotArray slots;
