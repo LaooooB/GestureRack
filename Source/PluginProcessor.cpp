@@ -8,7 +8,7 @@ constexpr auto slotTag = "SLOT";
 constexpr auto descriptionTag = "PLUGIN_DESCRIPTION";
 constexpr auto pluginStateTag = "PLUGIN_STATE";
 constexpr auto mappingsTag = "MAPPINGS";
-constexpr int currentStateVersion = 3;
+constexpr int currentStateVersion = 4;
 }
 
 class GestureRackAudioProcessor::ChildEditorWindow final : public juce::DocumentWindow
@@ -44,6 +44,7 @@ GestureRackAudioProcessor::GestureRackAudioProcessor()
     for (int i = 0; i < slotCount; ++i)
         slots[static_cast<size_t> (i)] = std::make_unique<gr::PluginSlot> (i);
 
+    installDefaultMappingsForAllSlots();
     juce::addDefaultFormatsToManager (formatManager);
     graphManager.initialise (juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels()));
     startTimerHz (50);
@@ -111,6 +112,7 @@ void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& 
 
 void GestureRackAudioProcessor::timerCallback()
 {
+    constexpr auto controlDeltaSeconds = 1.0f / 50.0f;
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
 
@@ -118,30 +120,21 @@ void GestureRackAudioProcessor::timerCallback()
     {
         lastVisionStableSlot = 0;
         lastVisionSequence = 0;
-        lastAppliedGesture = gr::Gesture::unknown;
+        rightRuntime.reset();
     }
     else
     {
         if (snapshot.sequence < lastVisionSequence)
         {
             lastVisionStableSlot = 0;
-            lastAppliedGesture = gr::Gesture::unknown;
+            rightRuntime.reset();
         }
         lastVisionSequence = snapshot.sequence;
     }
 
-    if (gestureEnabled.load (std::memory_order_relaxed) && connected)
+    const auto enabled = gestureEnabled.load (std::memory_order_relaxed);
+    if (enabled && connected)
     {
-        auto rightGesture = gr::Gesture::unknown;
-        if (snapshot.right.present)
-        {
-            if (snapshot.right.stableGesture == gr::ControlGesture::openPalm)
-                rightGesture = gr::Gesture::openPalm;
-            else if (snapshot.right.stableGesture == gr::ControlGesture::closedFist)
-                rightGesture = gr::Gesture::closedFist;
-        }
-
-        bool slotChangedByVision = false;
         const auto stableSlot = snapshot.left.stableSlot;
         if (snapshot.protocol >= 2
             && snapshot.left.present
@@ -150,37 +143,35 @@ void GestureRackAudioProcessor::timerCallback()
             && stableSlot != lastVisionStableSlot)
         {
             lastVisionStableSlot = stableSlot;
-            const auto targetSlot = stableSlot - 1;
-            if (targetSlot != getSelectedSlot())
-            {
-                setSelectedSlot (targetSlot);
-                slotChangedByVision = true;
-            }
-        }
-
-        if (! snapshot.right.present)
-        {
-            lastAppliedGesture = gr::Gesture::unknown;
-        }
-        else if (slotChangedByVision)
-        {
-            // Consume any gesture that was already held while the left hand changed slots.
-            // The right hand must release/disappear or change before it can act on the new slot.
-            lastAppliedGesture = rightGesture;
-        }
-        else if (rightGesture != gr::Gesture::unknown && rightGesture != lastAppliedGesture)
-        {
-            lastAppliedGesture = rightGesture;
-            const auto slotIndex = getSelectedSlot();
-            if (rightGesture == gr::Gesture::openPalm)
-                setSlotBypassed (slotIndex, false);
-            else if (rightGesture == gr::Gesture::closedFist)
-                setSlotBypassed (slotIndex, true);
+            setSelectedSlot (stableSlot - 1);
         }
     }
 
-    if (testSignalEnabled.load (std::memory_order_relaxed))
-        mappingEngine.processContinuous (getSelectedSlot(), getTestGesture(), getTestHeight(), 1.0f / 50.0f);
+    const auto liveRightGesture = connected && snapshot.right.present
+        ? snapshot.right.stableGesture
+        : gr::ControlGesture::unknown;
+    const auto runtimeFrame = rightRuntime.update (connected && snapshot.right.present,
+                                                   liveRightGesture);
+
+    const auto testing = testSignalEnabled.load (std::memory_order_relaxed);
+    if (enabled && connected && ! testing)
+    {
+        const auto slotIndex = getSelectedSlot();
+        if (runtimeFrame.entered && runtimeFrame.gesture != gr::ControlGesture::unknown)
+        {
+            mappingEngine.triggerGestureEntered (slotIndex, runtimeFrame.gesture);
+            updateMappingStatus ("LIVE ENTER: " + gr::controlGestureToString (runtimeFrame.gesture));
+        }
+
+        if (runtimeFrame.continuousActive && runtimeFrame.gesture != gr::ControlGesture::unknown)
+            mappingEngine.processContinuous (slotIndex,
+                                             runtimeFrame.gesture,
+                                             snapshot.right.height,
+                                             controlDeltaSeconds);
+    }
+
+    if (testing)
+        mappingEngine.processContinuous (getSelectedSlot(), getTestGesture(), getTestHeight(), controlDeltaSeconds);
 
     if (const auto capture = parameterLearnManager.pollCapture(); capture.has_value())
     {
@@ -204,12 +195,21 @@ void GestureRackAudioProcessor::setSelectedSlot (int slotIndex) noexcept
 {
     if (! isValidSlotIndex (slotIndex))
         return;
+
     const auto previous = selectedSlot.exchange (slotIndex, std::memory_order_relaxed);
     if (previous != slotIndex)
     {
+        rightRuntime.disarmForSlotChange();
         testSignalEnabled.store (false, std::memory_order_relaxed);
         parameterLearnManager.cancel();
     }
+}
+
+void GestureRackAudioProcessor::setGestureEnabled (bool enabled) noexcept
+{
+    const auto previous = gestureEnabled.exchange (enabled, std::memory_order_relaxed);
+    if (previous != enabled)
+        rightRuntime.disarmForSlotChange();
 }
 
 bool GestureRackAudioProcessor::isSlotLoaded (int slotIndex) const noexcept
@@ -242,6 +242,47 @@ int GestureRackAudioProcessor::getSlotMappingCount (int slotIndex) const
 {
     return isValidSlotIndex (slotIndex)
         ? static_cast<int> (slots[static_cast<size_t> (slotIndex)]->getMappings().size()) : 0;
+}
+
+int GestureRackAudioProcessor::getLiveMappingCount() const
+{
+    const auto gesture = isTestSignalEnabled() ? getTestGesture()
+                                               : (rightRuntime.isArmed()
+                                                    ? rightRuntime.getCurrentGesture()
+                                                    : gr::ControlGesture::unknown);
+    if (gesture == gr::ControlGesture::unknown)
+        return 0;
+
+    const auto mappings = getSlotMappings (getSelectedSlot());
+    return static_cast<int> (std::count_if (mappings.begin(), mappings.end(), [gesture] (const gr::GestureBinding& binding)
+    {
+        return binding.enabled && binding.sourceGesture == gesture;
+    }));
+}
+
+juce::String GestureRackAudioProcessor::getGestureRuntimeStatus() const
+{
+    if (isTestSignalEnabled())
+        return "TEST " + gr::controlGestureToString (getTestGesture()).toUpperCase();
+
+    if (! isVisionConnected())
+        return "VISION OFFLINE";
+
+    if (! rightRuntime.isArmed())
+    {
+        const auto blocked = rightRuntime.getBlockedGesture();
+        return "RE-ARM: RELEASE / CHANGE "
+             + (blocked == gr::ControlGesture::unknown
+                    ? juce::String ("GESTURE")
+                    : gr::controlGestureToString (blocked).toUpperCase());
+    }
+
+    const auto gesture = rightRuntime.getCurrentGesture();
+    if (gesture == gr::ControlGesture::unknown)
+        return "RIGHT READY";
+
+    return "LIVE " + gr::controlGestureToString (gesture).toUpperCase()
+         + "  |  " + juce::String (getLiveMappingCount()) + " MAPS";
 }
 
 std::vector<gr::ParameterDescriptor> GestureRackAudioProcessor::getSlotParameters (int slotIndex) const
@@ -327,6 +368,29 @@ void GestureRackAudioProcessor::cancelParameterLearn()
 void GestureRackAudioProcessor::updateMappingStatus (const juce::String& text)
 {
     mappingStatus = text;
+}
+
+void GestureRackAudioProcessor::installDefaultMappingsForSlot (int slotIndex)
+{
+    if (! isValidSlotIndex (slotIndex))
+        return;
+
+    juce::String ignored;
+    mappingEngine.addSlotActionBinding (slotIndex,
+                                        gr::ControlGesture::openPalm,
+                                        gr::MappingMode::triggerSetActive,
+                                        ignored);
+    ignored.clear();
+    mappingEngine.addSlotActionBinding (slotIndex,
+                                        gr::ControlGesture::closedFist,
+                                        gr::MappingMode::triggerSetBypassed,
+                                        ignored);
+}
+
+void GestureRackAudioProcessor::installDefaultMappingsForAllSlots()
+{
+    for (int slotIndex = 0; slotIndex < slotCount; ++slotIndex)
+        installDefaultMappingsForSlot (slotIndex);
 }
 
 void GestureRackAudioProcessor::loadVst3FromFile (int slotIndex, const juce::File& file)
@@ -518,6 +582,9 @@ void GestureRackAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     root.setAttribute ("version", currentStateVersion);
     root.setAttribute ("gestureEnabled", gestureEnabled.load (std::memory_order_relaxed));
     root.setAttribute ("selectedSlot", getSelectedSlot());
+    root.setAttribute ("rightControllerArmed", rightRuntime.isArmed());
+    root.setAttribute ("rightBlockedGesture",
+                       gr::controlGestureToString (rightRuntime.getBlockedGesture()));
 
     for (int slotIndex = 0; slotIndex < slotCount; ++slotIndex)
     {
@@ -551,6 +618,10 @@ void GestureRackAudioProcessor::clearRackForStateRestore()
 {
     parameterLearnManager.cancel();
     testSignalEnabled.store (false, std::memory_order_relaxed);
+    rightRuntime.reset();
+    lastVisionStableSlot = 0;
+    lastVisionSequence = 0;
+
     for (auto& generation : slotLoadGenerations)
         generation.fetch_add (1, std::memory_order_relaxed);
     for (auto& window : childEditorWindows)
@@ -645,12 +716,30 @@ void GestureRackAudioProcessor::setStateInformation (const void* data, int sizeI
         const auto version = stateCopy->getIntAttribute ("version", 1);
         if (version < 2)
         {
+            installDefaultMappingsForAllSlots();
             restoreLegacySingleSlotState (*stateCopy);
+            rightRuntime.reset();
             return;
         }
+
         for (auto* slotXml = stateCopy->getFirstChildElement(); slotXml != nullptr; slotXml = slotXml->getNextElement())
             if (slotXml->hasTagName (slotTag))
                 restoreSlotFromXml (*slotXml, version);
+
+        if (version == 2)
+            installDefaultMappingsForAllSlots();
+
+        if (version >= 4)
+        {
+            const auto armed = stateCopy->getBoolAttribute ("rightControllerArmed", true);
+            const auto blocked = gr::controlGestureFromString (
+                stateCopy->getStringAttribute ("rightBlockedGesture", "Unknown"));
+            rightRuntime.restoreArmingState (armed, blocked);
+        }
+        else
+        {
+            rightRuntime.reset();
+        }
     });
 }
 
