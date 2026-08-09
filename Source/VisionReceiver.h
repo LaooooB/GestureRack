@@ -1,6 +1,7 @@
 #pragma once
+
 #include <JuceHeader.h>
-#include "GestureTypes.h"
+#include "DualHandVisionTypes.h"
 
 namespace gr
 {
@@ -14,6 +15,7 @@ public:
     ~VisionReceiver() override;
 
     VisionSnapshot getSnapshot() const;
+    DualHandVisionSnapshot getDualHandSnapshot() const;
     bool isConnected() const;
 
 private:
@@ -21,7 +23,7 @@ private:
     void parsePacket (const juce::String& jsonText);
 
     mutable juce::SpinLock snapshotLock;
-    VisionSnapshot snapshot;
+    DualHandVisionSnapshot snapshot;
     juce::DatagramSocket socket { false };
 };
 }
