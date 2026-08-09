@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import socket
 import threading
 import time
@@ -14,14 +13,16 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+from hand_role_resolver import DetectedHand, HandRoleResolver
+
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/"
     "gesture_recognizer/float16/1/gesture_recognizer.task"
 )
 MULTICAST_ADDRESS = "239.255.71.77"
 MULTICAST_PORT = 17777
-PROTOCOL_VERSION = 1
-ALLOWED_GESTURES = {"Open_Palm", "Closed_Fist"}
+PROTOCOL_VERSION = 2
+ALLOWED_RIGHT_GESTURES = {"Open_Palm", "Closed_Fist"}
 
 
 def ensure_model(model_path: Path) -> None:
@@ -33,7 +34,7 @@ def ensure_model(model_path: Path) -> None:
 
 
 @dataclass
-class Stabilizer:
+class GestureStabilizer:
     hold_ms: int = 120
     min_confidence: float = 0.80
     stable: str = "None"
@@ -41,7 +42,7 @@ class Stabilizer:
     candidate_since_ms: int = 0
 
     def update(self, raw: str, confidence: float, now_ms: int) -> str:
-        valid = raw in ALLOWED_GESTURES and confidence >= self.min_confidence
+        valid = raw in ALLOWED_RIGHT_GESTURES and confidence >= self.min_confidence
         if not valid:
             self.candidate = "None"
             self.candidate_since_ms = 0
@@ -58,15 +59,59 @@ class Stabilizer:
         return self.stable
 
 
+def palm_metrics(landmarks: list[list[float]]) -> tuple[float, float, float, float]:
+    if len(landmarks) < 18:
+        return 0.5, 0.5, 0.0, 0.5
+
+    indices = (0, 5, 9, 13, 17)
+    palm_x = sum(landmarks[i][0] for i in indices) / len(indices)
+    palm_y = sum(landmarks[i][1] for i in indices) / len(indices)
+    palm_z = sum(landmarks[i][2] for i in indices) / len(indices)
+
+    top_y = 0.15
+    bottom_y = 0.85
+    normalized = (bottom_y - palm_y) / (bottom_y - top_y)
+    height = max(0.0, min(1.0, normalized))
+    return float(palm_x), float(palm_y), float(palm_z), float(height)
+
+
+def empty_left_packet() -> dict:
+    return {
+        "present": False,
+        "handedness_confidence": 0.0,
+        "raw_slot": 0,
+        "stable_slot": 0,
+        "confidence": 0.0,
+        "landmarks": [],
+    }
+
+
+def empty_right_packet(stable_gesture: str = "None") -> dict:
+    return {
+        "present": False,
+        "handedness_confidence": 0.0,
+        "raw_gesture": "None",
+        "stable_gesture": stable_gesture,
+        "confidence": 0.0,
+        "palm_x": 0.5,
+        "palm_y": 0.5,
+        "palm_z": 0.0,
+        "height": 0.5,
+        "landmarks": [],
+    }
+
+
 class GestureVisionEngine:
     def __init__(self, model_path: Path, camera_index: int, width: int, height: int,
-                 confidence: float, hold_ms: int, preview: bool):
+                 confidence: float, hold_ms: int, preview: bool,
+                 swap_handedness: bool):
         self.model_path = model_path
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.preview = preview
-        self.stabilizer = Stabilizer(hold_ms=hold_ms, min_confidence=confidence)
+        self.right_stabilizer = GestureStabilizer(hold_ms=hold_ms, min_confidence=confidence)
+        self.role_resolver = HandRoleResolver(swap_handedness=swap_handedness)
         self.sequence = 0
         self.lock = threading.Lock()
         self.last_packet = None
@@ -84,7 +129,7 @@ class GestureVisionEngine:
         options = GestureRecognizerOptions(
             base_options=BaseOptions(model_asset_path=str(model_path.resolve())),
             running_mode=RunningMode.LIVE_STREAM,
-            num_hands=1,
+            num_hands=2,
             min_hand_detection_confidence=0.5,
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
@@ -96,35 +141,82 @@ class GestureVisionEngine:
         )
         self.recognizer = GestureRecognizer.create_from_options(options)
 
-    def _on_result(self, result, _output_image, timestamp_ms: int) -> None:
-        hand_present = bool(result.hand_landmarks)
-        raw = "None"
-        confidence = 0.0
-        landmarks = []
+    @staticmethod
+    def _extract_hands(result) -> list[DetectedHand]:
+        hands: list[DetectedHand] = []
+        count = min(2, len(result.hand_landmarks or []))
 
-        if hand_present:
+        for index in range(count):
             landmarks = [
                 [float(lm.x), float(lm.y), float(lm.z)]
-                for lm in result.hand_landmarks[0]
+                for lm in result.hand_landmarks[index]
             ]
 
-        if result.gestures and result.gestures[0]:
-            top = result.gestures[0][0]
-            raw = top.category_name or "None"
-            confidence = float(top.score)
+            raw_gesture = "None"
+            gesture_confidence = 0.0
+            if result.gestures and index < len(result.gestures) and result.gestures[index]:
+                top = result.gestures[index][0]
+                raw_gesture = top.category_name or "None"
+                gesture_confidence = float(top.score)
 
-        stable = self.stabilizer.update(raw, confidence, timestamp_ms)
+            handedness_label = "Unknown"
+            handedness_confidence = 0.0
+            if result.handedness and index < len(result.handedness) and result.handedness[index]:
+                top_hand = result.handedness[index][0]
+                handedness_label = top_hand.category_name or "Unknown"
+                handedness_confidence = float(top_hand.score)
+
+            hands.append(DetectedHand(
+                landmarks=landmarks,
+                raw_gesture=raw_gesture,
+                gesture_confidence=gesture_confidence,
+                handedness_label=handedness_label,
+                handedness_confidence=handedness_confidence,
+            ))
+
+        return hands
+
+    def _on_result(self, result, _output_image, timestamp_ms: int) -> None:
+        detections = self._extract_hands(result)
+        left_hand, right_hand = self.role_resolver.resolve(detections, timestamp_ms)
+
+        left_packet = empty_left_packet()
+        if left_hand is not None:
+            left_packet = {
+                "present": True,
+                "handedness_confidence": left_hand.handedness_confidence,
+                "raw_slot": 0,
+                "stable_slot": 0,
+                "confidence": 0.0,
+                "landmarks": left_hand.landmarks,
+            }
+
+        right_packet = empty_right_packet(self.right_stabilizer.stable)
+        if right_hand is not None:
+            raw = right_hand.raw_gesture
+            confidence = right_hand.gesture_confidence
+            stable = self.right_stabilizer.update(raw, confidence, timestamp_ms)
+            palm_x, palm_y, palm_z, height = palm_metrics(right_hand.landmarks)
+            right_packet = {
+                "present": True,
+                "handedness_confidence": right_hand.handedness_confidence,
+                "raw_gesture": raw,
+                "stable_gesture": stable,
+                "confidence": confidence,
+                "palm_x": palm_x,
+                "palm_y": palm_y,
+                "palm_z": palm_z,
+                "height": height,
+                "landmarks": right_hand.landmarks,
+            }
+
         self.sequence += 1
-
         packet = {
             "protocol": PROTOCOL_VERSION,
             "seq": self.sequence,
             "timestamp_ms": timestamp_ms,
-            "hand": hand_present,
-            "raw": raw,
-            "stable": stable,
-            "confidence": confidence,
-            "landmarks": landmarks,
+            "left": left_packet,
+            "right": right_packet,
         }
 
         payload = json.dumps(packet, separators=(",", ":")).encode("utf-8")
@@ -132,6 +224,22 @@ class GestureVisionEngine:
 
         with self.lock:
             self.last_packet = packet
+
+    @staticmethod
+    def _draw_landmarks(frame, hand_packet: dict, colour: tuple[int, int, int], label: str) -> None:
+        if not hand_packet.get("present"):
+            return
+        height, width = frame.shape[:2]
+        landmarks = hand_packet.get("landmarks", [])
+        for point in landmarks:
+            x = int(max(0.0, min(1.0, point[0])) * width)
+            y = int(max(0.0, min(1.0, point[1])) * height)
+            cv2.circle(frame, (x, y), 3, colour, -1, cv2.LINE_AA)
+        if landmarks:
+            wrist_x = int(landmarks[0][0] * width)
+            wrist_y = int(landmarks[0][1] * height)
+            cv2.putText(frame, label, (wrist_x + 8, wrist_y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
 
     def run(self) -> None:
         capture = cv2.VideoCapture(self.camera_index)
@@ -142,9 +250,10 @@ class GestureVisionEngine:
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        print("Gesture Vision Engine running")
-        print("Open palm  -> ACTIVE")
-        print("Closed fist -> BYPASS")
+        print("Gesture Vision Engine running - protocol v2")
+        print("Tracking physical left and right hands independently")
+        print("Right hand currently classifies Open_Palm / Closed_Fist only")
+        print("Left slot classifier is intentionally deferred to Phase D")
         print(f"Sending multicast {MULTICAST_ADDRESS}:{MULTICAST_PORT}")
         if self.preview:
             print("Press ESC in the preview window to quit.")
@@ -174,13 +283,18 @@ class GestureVisionEngine:
 
                 if self.preview:
                     with self.lock:
-                        packet = self.last_packet.copy() if self.last_packet else None
+                        packet = json.loads(json.dumps(self.last_packet)) if self.last_packet else None
 
                     if packet:
-                        text = f"{packet['stable']}  {packet['confidence']:.2f}"
-                        cv2.putText(frame, text, (18, 36), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                    cv2.imshow("Gesture Vision Engine", frame)
+                        self._draw_landmarks(frame, packet["left"], (255, 190, 80), "PHYSICAL LEFT")
+                        self._draw_landmarks(frame, packet["right"], (80, 220, 140), "PHYSICAL RIGHT")
+                        right = packet["right"]
+                        status = (f"R: {right['stable_gesture']} {right['confidence']:.2f} "
+                                  f"H:{right['height']:.2f}")
+                        cv2.putText(frame, status, (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.72, (255, 255, 255), 2, cv2.LINE_AA)
+
+                    cv2.imshow("Gesture Vision Engine v2", frame)
                     if cv2.waitKey(1) & 0xFF == 27:
                         break
         finally:
@@ -200,6 +314,11 @@ def main() -> None:
     parser.add_argument("--hold-ms", type=int, default=120)
     parser.add_argument("--preview", action="store_true")
     parser.add_argument(
+        "--swap-handedness",
+        action="store_true",
+        help="Swap MediaPipe Left/Right labels if the mirrored camera pipeline reports physical roles reversed.",
+    )
+    parser.add_argument(
         "--model",
         type=Path,
         default=Path(__file__).resolve().parent / "models" / "gesture_recognizer.task",
@@ -215,6 +334,7 @@ def main() -> None:
         confidence=args.confidence,
         hold_ms=args.hold_ms,
         preview=args.preview,
+        swap_handedness=args.swap_handedness,
     )
     engine.run()
 

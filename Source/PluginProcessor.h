@@ -64,6 +64,7 @@ public:
     juce::String getLastError() const { return getSlotLastError (getSelectedSlot()); }
 
     gr::VisionSnapshot getVisionSnapshot() const { return vision.getSnapshot(); }
+    gr::DualHandVisionSnapshot getDualHandVisionSnapshot() const { return vision.getDualHandSnapshot(); }
     bool isVisionConnected() const { return vision.isConnected(); }
     bool isGestureEnabled() const noexcept { return gestureEnabled.load (std::memory_order_relaxed); }
     void setGestureEnabled (bool enabled) noexcept { gestureEnabled.store (enabled, std::memory_order_relaxed); }
