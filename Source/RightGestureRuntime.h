@@ -26,7 +26,10 @@ public:
     void restoreArmingState (bool shouldBeArmed, ControlGesture blocked) noexcept;
 
 private:
+    static constexpr int missingFramesBeforeReset = 5; // ~100 ms at the 50 Hz control rate.
+
     bool armed = true;
+    int missingFrameCount = 0;
     ControlGesture currentGesture = ControlGesture::unknown;
     ControlGesture previousGesture = ControlGesture::unknown;
     ControlGesture blockedGesture = ControlGesture::unknown;
