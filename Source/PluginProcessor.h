@@ -10,6 +10,7 @@
 #include "PluginSlot.h"
 #include "RackGraphManager.h"
 #include "GestureMappingEngine.h"
+#include "RightGestureRuntime.h"
 #include "ParameterLearnManager.h"
 
 class GestureRackAudioProcessor final : public juce::AudioProcessor,
@@ -67,8 +68,13 @@ public:
     gr::DualHandVisionSnapshot getDualHandVisionSnapshot() const { return vision.getDualHandSnapshot(); }
     bool isVisionConnected() const { return vision.isConnected(); }
     bool isGestureEnabled() const noexcept { return gestureEnabled.load (std::memory_order_relaxed); }
-    void setGestureEnabled (bool enabled) noexcept { gestureEnabled.store (enabled, std::memory_order_relaxed); }
+    void setGestureEnabled (bool enabled) noexcept;
     bool isGestureBypassed() const noexcept { return isSlotBypassed (getSelectedSlot()); }
+
+    bool isRightControllerArmed() const noexcept { return rightRuntime.isArmed(); }
+    gr::ControlGesture getLiveRightGesture() const noexcept { return rightRuntime.getCurrentGesture(); }
+    int getLiveMappingCount() const;
+    juce::String getGestureRuntimeStatus() const;
 
     std::vector<gr::ParameterDescriptor> getSlotParameters (int slotIndex) const;
     std::vector<gr::GestureBinding> getSlotMappings (int slotIndex) const;
@@ -133,13 +139,15 @@ private:
     void clearRackForStateRestore();
     void restoreSlotFromXml (const juce::XmlElement& slotXml, int stateVersion);
     void restoreLegacySingleSlotState (const juce::XmlElement& root);
+    void installDefaultMappingsForSlot (int slotIndex);
+    void installDefaultMappingsForAllSlots();
     void updateTotalLatency();
     void updateMappingStatus (const juce::String& text);
 
     gr::VisionReceiver vision;
     std::atomic<bool> gestureEnabled { true };
     std::atomic<int> selectedSlot { 0 };
-    gr::Gesture lastAppliedGesture = gr::Gesture::unknown;
+    gr::RightGestureRuntime rightRuntime;
     int lastVisionStableSlot = 0;
     int64_t lastVisionSequence = 0;
 
