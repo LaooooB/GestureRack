@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
