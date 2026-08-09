@@ -52,6 +52,7 @@ juce_generate_juce_header(GestureRack)
 target_sources(GestureRack PRIVATE
     Source/GestureTypes.h
     Source/ControlGesture.h
+    Source/DualHandVisionTypes.h
     Source/GestureBinding.h
     Source/GestureBinding.cpp
     Source/GestureMappingEngine.h
