@@ -51,6 +51,15 @@ juce_generate_juce_header(GestureRack)
 
 target_sources(GestureRack PRIVATE
     Source/GestureTypes.h
+    Source/ControlGesture.h
+    Source/GestureBinding.h
+    Source/GestureBinding.cpp
+    Source/GestureMappingEngine.h
+    Source/GestureMappingEngine.cpp
+    Source/ParameterLearnManager.h
+    Source/ParameterLearnManager.cpp
+    Source/ParameterInspector.h
+    Source/ParameterInspector.cpp
     Source/VisionReceiver.h
     Source/VisionReceiver.cpp
     Source/GestureBypassWrapper.h
