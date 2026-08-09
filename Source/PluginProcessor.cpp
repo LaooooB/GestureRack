@@ -726,7 +726,7 @@ void GestureRackAudioProcessor::setStateInformation (const void* data, int sizeI
             if (slotXml->hasTagName (slotTag))
                 restoreSlotFromXml (*slotXml, version);
 
-        if (version == 2)
+        if (version >= 2 && version <= 3)
             installDefaultMappingsForAllSlots();
 
         if (version >= 4)
