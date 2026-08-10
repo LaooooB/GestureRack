@@ -31,4 +31,4 @@ jobs:
           name: GestureRack-Windows-VST3
           path: build/GestureRack_artefacts/Release/VST3/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
