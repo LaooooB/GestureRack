@@ -1,6 +1,7 @@
 name: Windows VST3 Build
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -23,3 +24,11 @@ jobs:
 
       - name: Build GestureRack VST3
         run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+
+      - name: Upload Gesture Rack VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestureRack-Windows-VST3
+          path: build/GestureRack_artefacts/Release/VST3/
+          if-no-files-found: error
+          retention-days: 14
