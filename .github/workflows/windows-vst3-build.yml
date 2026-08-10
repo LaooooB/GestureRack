@@ -25,6 +25,7 @@ jobs:
       - name: Build GestureRack VST3
         run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
 
+      # Keep the compiled plugin available as a downloadable CI artifact.
       - name: Upload Gesture Rack VST3
         uses: actions/upload-artifact@v4
         with:
