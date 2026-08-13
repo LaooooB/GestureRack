@@ -177,6 +177,9 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
     }
 
     const juce::SpinLock::ScopedLockType lock (snapshotLock);
+    const auto sameSession = next.sessionId == snapshot.sessionId;
+    if (snapshot.receivedAtMs > 0 && sameSession && next.sequence <= snapshot.sequence)
+        return;
     snapshot = next;
 }
 }
