@@ -16,8 +16,34 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    bool isInterestedInFileDrag (const juce::StringArray& files) override;
-    void filesDropped (const juce::StringArray& files, int x, int y) override;
+    bool isInterestedInFileDrag (const juce::StringArray& files) override
+    {
+        for (const auto& path : files)
+            if (path.endsWithIgnoreCase (".vst3"))
+                return true;
+        return false;
+    }
+
+    void filesDropped (const juce::StringArray& files, int x, int y) override
+    {
+        int targetSlot = processor.getSelectedSlot();
+        for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
+            if (slotButtons[static_cast<size_t> (i)].getBounds().contains (x, y))
+            {
+                targetSlot = i;
+                break;
+            }
+
+        for (const auto& path : files)
+            if (path.endsWithIgnoreCase (".vst3"))
+            {
+                processor.setSelectedSlot (targetSlot);
+                processor.loadVst3FromFile (targetSlot, juce::File (path));
+                updateSlotButtons();
+                repaint();
+                break;
+            }
+    }
 
 private:
     void timerCallback() override;
