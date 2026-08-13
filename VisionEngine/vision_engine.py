@@ -281,8 +281,10 @@ class GestureVisionEngine:
         if not capture.isOpened():
             raise RuntimeError(f"Could not open camera index {self.camera_index}")
 
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        capture.set(cv2.CAP_PROP_FPS, 30.0)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         print("Gesture Vision Engine running - protocol v2")
