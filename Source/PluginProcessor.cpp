@@ -115,8 +115,12 @@ void GestureRackAudioProcessor::timerCallback()
     constexpr auto controlDeltaSeconds = 1.0f / 100.0f;
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
+    const auto packetAgeMs = snapshot.receivedAtMs > 0
+        ? juce::Time::currentTimeMillis() - snapshot.receivedAtMs
+        : static_cast<int64_t> (1000000);
+    const auto controlFresh = connected && packetAgeMs >= 0 && packetAgeMs <= 300;
 
-    if (! connected)
+    if (! controlFresh)
     {
         lastVisionStableSlot = 0;
         lastVisionSequence = 0;
@@ -133,7 +137,7 @@ void GestureRackAudioProcessor::timerCallback()
     }
 
     const auto enabled = gestureEnabled.load (std::memory_order_relaxed);
-    if (enabled && connected)
+    if (enabled && controlFresh)
     {
         const auto stableSlot = snapshot.left.stableSlot;
         if (snapshot.protocol >= 2
@@ -147,14 +151,14 @@ void GestureRackAudioProcessor::timerCallback()
         }
     }
 
-    const auto liveRightGesture = connected && snapshot.right.present
+    const auto liveRightGesture = controlFresh && snapshot.right.present
         ? snapshot.right.stableGesture
         : gr::ControlGesture::unknown;
-    const auto runtimeFrame = rightRuntime.update (connected && snapshot.right.present,
+    const auto runtimeFrame = rightRuntime.update (controlFresh && snapshot.right.present,
                                                    liveRightGesture);
 
     const auto testing = testSignalEnabled.load (std::memory_order_relaxed);
-    if (enabled && connected && ! testing)
+    if (enabled && controlFresh && ! testing)
     {
         const auto slotIndex = getSelectedSlot();
         if (runtimeFrame.entered && runtimeFrame.gesture != gr::ControlGesture::unknown)
