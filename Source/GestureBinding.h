@@ -46,7 +46,7 @@ struct GestureBinding
 
     float minValue = 0.0f;
     float maxValue = 1.0f;
-    float smoothingMs = 80.0f;
+    float smoothingMs = 20.0f;
     float deadband = 0.008f;
     bool inverted = false;
     bool enabled = true;
