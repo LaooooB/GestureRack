@@ -18,9 +18,60 @@ public:
 
     void paint (juce::Graphics& g) override;
     void resized() override;
-    void mouseDown (const juce::MouseEvent& event) override;
-    void mouseDrag (const juce::MouseEvent& event) override;
-    void mouseUp (const juce::MouseEvent& event) override;
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        const auto point = event.getPosition();
+        for (int i = 0; i < static_cast<int> (gestureSourceRects.size()); ++i)
+            if (gestureSourceRects[static_cast<size_t> (i)].contains (point))
+            {
+                draggedGesture = gestureForSourceIndex (i);
+                draggingGesture = draggedGesture != ControlGesture::unknown;
+                dragPoint = point;
+                repaint();
+                return;
+            }
+    }
+
+    void mouseDrag (const juce::MouseEvent& event) override
+    {
+        if (! draggingGesture)
+            return;
+        dragPoint = event.getPosition();
+        repaint();
+    }
+
+    void mouseUp (const juce::MouseEvent& event) override
+    {
+        if (! draggingGesture)
+            return;
+
+        const auto point = event.getPosition();
+        juce::String error;
+        if (activeDropRect.contains (point))
+            processor.addSlotActionGestureMapping (draggedGesture, MappingMode::triggerSetActive, error);
+        else if (bypassDropRect.contains (point))
+            processor.addSlotActionGestureMapping (draggedGesture, MappingMode::triggerSetBypassed, error);
+        else if (learnDropRect.contains (point))
+        {
+            if (processor.isParameterLearnArmed())
+                processor.cancelParameterLearn();
+            processor.beginParameterLearn (draggedGesture, error);
+        }
+        else if (parameterList.getBounds().contains (point))
+        {
+            const auto local = parameterList.getLocalPoint (this, point);
+            const auto row = parameterList.getRowContainingPosition (local.x, local.y);
+            if (juce::isPositiveAndBelow (row, static_cast<int> (parameters.size()))
+                && parameters[static_cast<size_t> (row)].automatable)
+                processor.addParameterGestureMapping (parameters[static_cast<size_t> (row)].index,
+                                                      draggedGesture, error);
+        }
+
+        draggingGesture = false;
+        draggedGesture = ControlGesture::unknown;
+        repaint();
+    }
 
 private:
     class ParameterListModel;
@@ -35,7 +86,20 @@ private:
     void updateControlEnablement();
 
     ControlGesture getSelectedGesture() const;
-    static ControlGesture gestureForSourceIndex (int index);
+    static ControlGesture gestureForSourceIndex (int index)
+    {
+        switch (index)
+        {
+            case 0: return ControlGesture::openPalm;
+            case 1: return ControlGesture::closedFist;
+            case 2: return ControlGesture::victory;
+            case 3: return ControlGesture::thumbUp;
+            case 4: return ControlGesture::thumbDown;
+            case 5: return ControlGesture::pointRight;
+            case 6: return ControlGesture::pointLeft;
+            default:return ControlGesture::unknown;
+        }
+    }
     void mapSelectedParameter();
     void addSlotAction (MappingMode mode);
     void beginLearn();
