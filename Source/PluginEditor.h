@@ -101,6 +101,13 @@ private:
 
     std::array<juce::TextButton, GestureRackAudioProcessor::slotCount> slotButtons;
     std::array<juce::Rectangle<int>, GestureRackAudioProcessor::slotCount> slotDropRects {};
+    std::array<juce::Rectangle<int>, 7> gestureRects {};
+    juce::Rectangle<int> activeTargetRect;
+    juce::Rectangle<int> bypassTargetRect;
+    juce::Rectangle<int> learnTargetRect;
+    bool gestureDragging = false;
+    gr::ControlGesture draggedGesture = gr::ControlGesture::unknown;
+    juce::Point<int> gestureDragPoint;
     juce::TextButton loadButton { "LOAD / REPLACE" };
     juce::TextButton openButton { "OPEN PLUGIN" };
     juce::TextButton removeButton { "REMOVE" };
