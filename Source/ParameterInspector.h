@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <array>
 #include <memory>
 #include <vector>
 #include "GestureBinding.h"
@@ -17,6 +18,9 @@ public:
 
     void paint (juce::Graphics& g) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent& event) override;
+    void mouseDrag (const juce::MouseEvent& event) override;
+    void mouseUp (const juce::MouseEvent& event) override;
 
 private:
     class ParameterListModel;
@@ -31,6 +35,7 @@ private:
     void updateControlEnablement();
 
     ControlGesture getSelectedGesture() const;
+    static ControlGesture gestureForSourceIndex (int index);
     void mapSelectedParameter();
     void addSlotAction (MappingMode mode);
     void beginLearn();
@@ -66,6 +71,14 @@ private:
     juce::ToggleButton mappingEnabledButton { "ENABLED" };
     juce::TextButton applyMappingButton { "APPLY" };
     juce::TextButton removeMappingButton { "REMOVE MAP" };
+
+    std::array<juce::Rectangle<int>, 7> gestureSourceRects {};
+    juce::Rectangle<int> activeDropRect;
+    juce::Rectangle<int> bypassDropRect;
+    juce::Rectangle<int> learnDropRect;
+    bool draggingGesture = false;
+    ControlGesture draggedGesture = ControlGesture::unknown;
+    juce::Point<int> dragPoint;
 
     std::vector<ParameterDescriptor> parameters;
     std::vector<GestureBinding> mappings;
