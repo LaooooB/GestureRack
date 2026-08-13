@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import socket
+import sys
 import threading
 import time
 import urllib.request
@@ -22,7 +23,6 @@ def _resource_dir() -> Path:
     containing this source file. Bundled assets such as the gesture model
     live here.
     """
-    import sys
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         return Path(meipass)
@@ -31,6 +31,7 @@ def _resource_dir() -> Path:
 
 def default_model_path() -> Path:
     return _resource_dir() / "models" / "gesture_recognizer.task"
+
 
 from gesture_stabilizer import GestureStabilizer
 from hand_role_resolver import DetectedHand, HandRoleResolver
@@ -318,13 +319,21 @@ class GestureVisionEngine:
         code = int(value)
         return "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4))
 
-    def run(self) -> None:
-        capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-        if not capture.isOpened():
+    def _open_camera(self):
+        backends = [cv2.CAP_ANY]
+        if sys.platform.startswith("win"):
+            backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+
+        for backend in backends:
+            capture = cv2.VideoCapture(self.camera_index, backend)
+            if capture.isOpened():
+                return capture
             capture.release()
-            capture = cv2.VideoCapture(self.camera_index, cv2.CAP_ANY)
-        if not capture.isOpened():
-            raise RuntimeError(f"Could not open camera index {self.camera_index}")
+
+        raise RuntimeError(f"Could not open camera index {self.camera_index}")
+
+    def run(self) -> None:
+        capture = self._open_camera()
 
         capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
