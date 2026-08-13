@@ -287,7 +287,33 @@ class GestureVisionEngine:
         capture.set(cv2.CAP_PROP_FPS, 30.0)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        print("Gesture Vision Engine running - protocol v2")
+        frame_lock = threading.Lock()
+        stop_capture = threading.Event()
+        latest_frame = None
+        latest_sequence = 0
+
+        def capture_loop() -> None:
+            nonlocal latest_frame, latest_sequence
+            while not stop_capture.is_set():
+                ok, frame = capture.read()
+                if not ok:
+                    if stop_capture.is_set():
+                        break
+                    time.sleep(0.002)
+                    continue
+                with frame_lock:
+                    latest_frame = frame
+                    latest_sequence += 1
+
+        capture_thread = threading.Thread(
+            target=capture_loop,
+            name="GestureRackLatestFrameCapture",
+            daemon=True,
+        )
+        capture_thread.start()
+
+        print("Gesture Vision Engine running - low-latency protocol v2")
+        print("Camera capture runs independently and keeps only the newest frame")
         print("Tracking physical left and right hands independently")
         print("Left hand classifies Slot 1-5 only; Slot 6-9 remain mouse-selectable")
         print("Right hand: Open Palm / Closed Fist / Victory / Thumb Up / Thumb Down / Point Right / Point Left")
@@ -298,13 +324,17 @@ class GestureVisionEngine:
             print("Press Ctrl+C to quit.")
 
         last_submit_ms = -1
+        last_consumed_sequence = 0
 
         try:
             while True:
-                ok, frame = capture.read()
-                if not ok:
-                    time.sleep(0.01)
+                with frame_lock:
+                    frame = latest_frame
+                    sequence = latest_sequence
+                if frame is None or sequence == last_consumed_sequence:
+                    time.sleep(0.001)
                     continue
+                last_consumed_sequence = sequence
 
                 frame = cv2.flip(frame, 1)
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -340,7 +370,9 @@ class GestureVisionEngine:
                     if cv2.waitKey(1) & 0xFF == 27:
                         break
         finally:
+            stop_capture.set()
             capture.release()
+            capture_thread.join(timeout=2.0)
             if self.preview:
                 cv2.destroyAllWindows()
             self.recognizer.close()
