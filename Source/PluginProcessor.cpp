@@ -47,7 +47,7 @@ GestureRackAudioProcessor::GestureRackAudioProcessor()
     installDefaultMappingsForAllSlots();
     juce::addDefaultFormatsToManager (formatManager);
     graphManager.initialise (juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels()));
-    startTimerHz (50);
+    startTimerHz (100);
 }
 
 GestureRackAudioProcessor::~GestureRackAudioProcessor()
@@ -112,7 +112,7 @@ void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& 
 
 void GestureRackAudioProcessor::timerCallback()
 {
-    constexpr auto controlDeltaSeconds = 1.0f / 50.0f;
+    constexpr auto controlDeltaSeconds = 1.0f / 100.0f;
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
 
