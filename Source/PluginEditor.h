@@ -33,6 +33,12 @@ public:
         g.drawText ("GESTURE MODULATORS", panel.getX() + 16, panel.getY() + 14,
                     panel.getWidth() - 32, 20, juce::Justification::centredLeft);
 
+        g.setColour (juce::Colour::fromRGB (116, 125, 140));
+        g.setFont (juce::FontOptions (9.0f));
+        g.drawText ("DRAG A GESTURE TO A TARGET OR PARAMETER",
+                    panel.getX() + 16, panel.getY() + 34,
+                    panel.getWidth() - 32, 16, juce::Justification::centredLeft);
+
         const auto live = processor.getLiveRightGesture();
         const std::array<gr::ControlGesture, 7> gestures {
             gr::ControlGesture::openPalm, gr::ControlGesture::closedFist,
@@ -57,6 +63,30 @@ public:
                               juce::Justification::centred, 1);
             row.removeFromLeft (gap);
         }
+
+        auto targets = panel.reduced (16).withTrimmedTop (104).removeFromTop (42);
+        activeTargetRect = targets.removeFromLeft ((targets.getWidth() - 8) / 2);
+        targets.removeFromLeft (8);
+        bypassTargetRect = targets;
+        learnTargetRect = panel.reduced (16).withTrimmedTop (154).removeFromTop (42);
+
+        const auto drawTarget = [&] (juce::Rectangle<int> rect, const juce::String& text)
+        {
+            const auto hot = gestureDragging && rect.contains (gestureDragPoint);
+            g.setColour (hot ? juce::Colour::fromRGB (69, 109, 190)
+                             : juce::Colour::fromRGB (24, 28, 35));
+            g.fillRoundedRectangle (rect.toFloat(), 8.0f);
+            g.setColour (hot ? juce::Colour::fromRGB (232, 241, 255)
+                             : juce::Colour::fromRGB (118, 128, 144));
+            g.drawRoundedRectangle (rect.toFloat(), 8.0f, 1.0f);
+            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawText (text, rect, juce::Justification::centred);
+        };
+
+        drawTarget (activeTargetRect, "ACTIVE");
+        drawTarget (bypassTargetRect, "BYPASS");
+        drawTarget (learnTargetRect,
+                    processor.isParameterLearnArmed() ? "LEARNING PARAMETER..." : "PARAMETER LEARN");
     }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
