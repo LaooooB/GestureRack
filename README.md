@@ -2,6 +2,9 @@
 
 A JUCE audio effect that hosts a child VST3 and controls its audible bypass state from webcam hand gestures.
 
+> **不想编译？直接用预编译版（Windows，下载即用，无需装 Python）：**
+> 到 [Releases](../../releases) 下载 `GestureRack-v0.1.0-Windows.zip`，解压后按包内 `使用说明-快速开始.txt` 三步即可使用（装 VST3 → 双击 `GestureVisionEngine.exe` → DAW 加载）。`GestureVisionEngine.exe` 已内置 Python 运行时、MediaPipe、OpenCV 和手势模型，无需另装环境。
+
 Current gesture mapping:
 
 - **Open_Palm** -> child effect ACTIVE

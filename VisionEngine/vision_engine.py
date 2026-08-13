@@ -12,6 +12,25 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+
+def _resource_dir() -> Path:
+    """Return the directory that ships bundled resources.
+
+    When frozen with PyInstaller (``--onefile``) this is the temporary
+    extraction directory (``sys._MEIPASS``); otherwise it is the directory
+    containing this source file. Bundled assets such as the gesture model
+    live here.
+    """
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).resolve().parent
+
+
+def default_model_path() -> Path:
+    return _resource_dir() / "models" / "gesture_recognizer.task"
+
 from gesture_stabilizer import GestureStabilizer
 from hand_role_resolver import DetectedHand, HandRoleResolver
 from right_gesture_classifier import RIGHT_GESTURES, classify_right_gesture
@@ -109,26 +128,43 @@ class GestureVisionEngine:
         RunningMode = mp.tasks.vision.RunningMode
         ClassifierOptions = mp.tasks.components.processors.ClassifierOptions
 
-        options = GestureRecognizerOptions(
+        # The canned-gesture classifier option field was renamed across
+        # MediaPipe versions: older wheels use the singular
+        # ``canned_gesture_classifier_options`` while newer ones use the
+        # plural ``canned_gestures_classifier_options``. Detect the real field
+        # name so the engine works on either wheel without a source edit.
+        import dataclasses as _dataclasses
+        _option_fields = {
+            f.name for f in _dataclasses.fields(GestureRecognizerOptions)
+        } if _dataclasses.is_dataclass(GestureRecognizerOptions) else set()
+        _canned_field_name = (
+            "canned_gestures_classifier_options"
+            if "canned_gestures_classifier_options" in _option_fields
+            else "canned_gesture_classifier_options"
+        )
+
+        options_kwargs = dict(
             base_options=BaseOptions(model_asset_path=str(model_path.resolve())),
             running_mode=RunningMode.LIVE_STREAM,
             num_hands=2,
             min_hand_detection_confidence=0.5,
             min_hand_presence_confidence=0.5,
             min_tracking_confidence=0.5,
-            canned_gestures_classifier_options=ClassifierOptions(
-                score_threshold=0.0,
-                category_allowlist=[
-                    "Open_Palm",
-                    "Closed_Fist",
-                    "Victory",
-                    "Thumb_Up",
-                    "Thumb_Down",
-                    "Pointing_Up",
-                ],
-            ),
             result_callback=self._on_result,
         )
+        options_kwargs[_canned_field_name] = ClassifierOptions(
+            score_threshold=0.0,
+            category_allowlist=[
+                "Open_Palm",
+                "Closed_Fist",
+                "Victory",
+                "Thumb_Up",
+                "Thumb_Down",
+                "Pointing_Up",
+            ],
+        )
+
+        options = GestureRecognizerOptions(**options_kwargs)
         self.recognizer = GestureRecognizer.create_from_options(options)
 
     @staticmethod
@@ -330,7 +366,7 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=Path,
-        default=Path(__file__).resolve().parent / "models" / "gesture_recognizer.task",
+        default=default_model_path(),
     )
     args = parser.parse_args()
 
