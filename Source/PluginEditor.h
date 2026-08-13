@@ -43,9 +43,11 @@ public:
         auto row = panel.reduced (16).withTrimmedTop (48).removeFromTop (36);
         const auto gap = 5;
         const auto width = juce::jmax (1, (row.getWidth() - gap * 6) / 7);
-        for (const auto gesture : gestures)
+        for (int i = 0; i < static_cast<int> (gestures.size()); ++i)
         {
+            const auto gesture = gestures[static_cast<size_t> (i)];
             auto chip = row.removeFromLeft (width);
+            gestureRects[static_cast<size_t> (i)] = chip;
             g.setColour (gesture == live ? juce::Colour::fromRGB (69, 109, 190)
                                          : juce::Colour::fromRGB (29, 34, 43));
             g.fillRoundedRectangle (chip.toFloat(), 7.0f);
