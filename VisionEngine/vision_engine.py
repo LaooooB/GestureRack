@@ -279,7 +279,7 @@ class GestureVisionEngine:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
 
     def run(self) -> None:
-        capture = cv2.VideoCapture(self.camera_index)
+        capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
         if not capture.isOpened():
             raise RuntimeError(f"Could not open camera index {self.camera_index}")
 
