@@ -353,10 +353,10 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--confidence", type=float, default=0.80)
-    parser.add_argument("--hold-ms", type=int, default=120)
-    parser.add_argument("--release-ms", type=int, default=100)
+    parser.add_argument("--hold-ms", type=int, default=50)
+    parser.add_argument("--release-ms", type=int, default=50)
     parser.add_argument("--slot-confidence", type=float, default=0.80)
-    parser.add_argument("--slot-hold-ms", type=int, default=150)
+    parser.add_argument("--slot-hold-ms", type=int, default=80)
     parser.add_argument("--preview", action="store_true")
     parser.add_argument(
         "--swap-handedness",
