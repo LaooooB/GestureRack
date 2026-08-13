@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 import cv2
@@ -115,8 +116,23 @@ class GestureVisionEngine:
         self.left_stabilizer = SlotStabilizer(hold_ms=slot_hold_ms, min_confidence=slot_confidence)
         self.role_resolver = HandRoleResolver(swap_handedness=swap_handedness)
         self.sequence = 0
+        self.session_id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
         self.last_packet = None
+
+        self.telemetry_lock = threading.Lock()
+        self.submit_capture_ms: dict[int, int] = {}
+        self.capture_fps = 0.0
+        self.vision_fps = 0.0
+        self.capture_window_started = time.monotonic()
+        self.capture_window_frames = 0
+        self.vision_window_started = time.monotonic()
+        self.vision_window_results = 0
+        self.camera_backend = "UNKNOWN"
+        self.camera_width = width
+        self.camera_height = height
+        self.camera_fps = 0.0
+        self.camera_fourcc = ""
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
@@ -198,6 +214,28 @@ class GestureVisionEngine:
         return hands
 
     def _on_result(self, result, _output_image, timestamp_ms: int) -> None:
+        result_ms = int(time.monotonic() * 1000)
+        with self.telemetry_lock:
+            capture_ms = self.submit_capture_ms.pop(timestamp_ms, timestamp_ms)
+            self.vision_window_results += 1
+            elapsed = time.monotonic() - self.vision_window_started
+            if elapsed >= 1.0:
+                self.vision_fps = self.vision_window_results / elapsed
+                self.vision_window_results = 0
+                self.vision_window_started = time.monotonic()
+            telemetry = {
+                "capture_fps": self.capture_fps,
+                "vision_fps": self.vision_fps,
+                "capture_to_submit_ms": max(0.0, float(timestamp_ms - capture_ms)),
+                "inference_ms": max(0.0, float(result_ms - timestamp_ms)),
+                "capture_to_result_ms": max(0.0, float(result_ms - capture_ms)),
+                "backend": self.camera_backend,
+                "width": self.camera_width,
+                "height": self.camera_height,
+                "fps": self.camera_fps,
+                "fourcc": self.camera_fourcc,
+            }
+
         detections = self._extract_hands(result)
         left_hand, right_hand = self.role_resolver.resolve(detections, timestamp_ms)
 
@@ -245,8 +283,10 @@ class GestureVisionEngine:
         self.sequence += 1
         packet = {
             "protocol": PROTOCOL_VERSION,
+            "session_id": self.session_id,
             "seq": self.sequence,
             "timestamp_ms": timestamp_ms,
+            "telemetry": telemetry,
             "left": left_packet,
             "right": right_packet,
         }
@@ -273,6 +313,11 @@ class GestureVisionEngine:
             cv2.putText(frame, label, (wrist_x + 8, wrist_y - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 2, cv2.LINE_AA)
 
+    @staticmethod
+    def _fourcc_text(value: float) -> str:
+        code = int(value)
+        return "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4))
+
     def run(self) -> None:
         capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
         if not capture.isOpened():
@@ -286,16 +331,26 @@ class GestureVisionEngine:
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         capture.set(cv2.CAP_PROP_FPS, 30.0)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        try:
+            self.camera_backend = capture.getBackendName()
+        except Exception:
+            self.camera_backend = "UNKNOWN"
+        self.camera_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.camera_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.camera_fps = float(capture.get(cv2.CAP_PROP_FPS))
+        self.camera_fourcc = self._fourcc_text(capture.get(cv2.CAP_PROP_FOURCC))
 
         frame_lock = threading.Lock()
         stop_capture = threading.Event()
         latest_frame = None
         latest_sequence = 0
+        latest_capture_ms = 0
 
         def capture_loop() -> None:
-            nonlocal latest_frame, latest_sequence
+            nonlocal latest_frame, latest_sequence, latest_capture_ms
             while not stop_capture.is_set():
                 ok, frame = capture.read()
+                now = time.monotonic()
                 if not ok:
                     if stop_capture.is_set():
                         break
@@ -304,6 +359,14 @@ class GestureVisionEngine:
                 with frame_lock:
                     latest_frame = frame
                     latest_sequence += 1
+                    latest_capture_ms = int(now * 1000)
+                with self.telemetry_lock:
+                    self.capture_window_frames += 1
+                    elapsed = now - self.capture_window_started
+                    if elapsed >= 1.0:
+                        self.capture_fps = self.capture_window_frames / elapsed
+                        self.capture_window_frames = 0
+                        self.capture_window_started = now
 
         capture_thread = threading.Thread(
             target=capture_loop,
@@ -313,6 +376,9 @@ class GestureVisionEngine:
         capture_thread.start()
 
         print("Gesture Vision Engine running - low-latency protocol v2")
+        print(f"Session: {self.session_id}")
+        print(f"Camera: {self.camera_backend} {self.camera_width}x{self.camera_height} "
+              f"{self.camera_fps:.1f} FPS {self.camera_fourcc}")
         print("Camera capture runs independently and keeps only the newest frame")
         print("Tracking physical left and right hands independently")
         print("Left hand classifies Slot 1-5 only; Slot 6-9 remain mouse-selectable")
@@ -331,6 +397,7 @@ class GestureVisionEngine:
                 with frame_lock:
                     frame = latest_frame
                     sequence = latest_sequence
+                    capture_ms = latest_capture_ms
                 if frame is None or sequence == last_consumed_sequence:
                     time.sleep(0.001)
                     continue
@@ -344,6 +411,11 @@ class GestureVisionEngine:
                 if timestamp_ms <= last_submit_ms:
                     timestamp_ms = last_submit_ms + 1
                 last_submit_ms = timestamp_ms
+                with self.telemetry_lock:
+                    self.submit_capture_ms[timestamp_ms] = capture_ms
+                    while len(self.submit_capture_ms) > 16:
+                        oldest = next(iter(self.submit_capture_ms))
+                        self.submit_capture_ms.pop(oldest, None)
 
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 self.recognizer.recognize_async(mp_image, timestamp_ms)
@@ -355,15 +427,12 @@ class GestureVisionEngine:
                     if packet:
                         self._draw_landmarks(frame, packet["left"], (255, 190, 80), "PHYSICAL LEFT")
                         self._draw_landmarks(frame, packet["right"], (80, 220, 140), "PHYSICAL RIGHT")
-                        left = packet["left"]
-                        right = packet["right"]
-                        left_status = (f"L: raw {left['raw_slot']} stable {left['stable_slot']} "
-                                       f"{left['confidence']:.2f}")
-                        right_status = (f"R: raw {right['raw_gesture']} stable {right['stable_gesture']} "
-                                        f"{right['confidence']:.2f} H:{right['height']:.2f}")
-                        cv2.putText(frame, left_status, (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.60, (255, 255, 255), 2, cv2.LINE_AA)
-                        cv2.putText(frame, right_status, (18, 64), cv2.FONT_HERSHEY_SIMPLEX,
+                        telemetry = packet.get("telemetry", {})
+                        cv2.putText(frame,
+                                    f"CAM {telemetry.get('capture_fps', 0.0):.1f}  "
+                                    f"VISION {telemetry.get('vision_fps', 0.0):.1f}  "
+                                    f"LAT {telemetry.get('capture_to_result_ms', 0.0):.0f}ms",
+                                    (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.60, (255, 255, 255), 2, cv2.LINE_AA)
 
                     cv2.imshow("Gesture Vision Engine v2", frame)
