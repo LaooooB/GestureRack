@@ -156,6 +156,14 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
     next.timestampMs = static_cast<int64_t> (object->getProperty ("timestamp_ms"));
     next.receivedAtMs = juce::Time::currentTimeMillis();
 
+    if (const auto telemetryVar = object->getProperty ("telemetry"); telemetryVar.isObject())
+        if (auto* telemetry = telemetryVar.getDynamicObject())
+        {
+            next.captureFps = static_cast<float> (telemetry->getProperty ("capture_fps"));
+            next.visionFps = static_cast<float> (telemetry->getProperty ("vision_fps"));
+            next.captureToResultMs = static_cast<float> (telemetry->getProperty ("capture_to_result_ms"));
+        }
+
     if (protocol == 1)
     {
         parseLegacyV1 (*object, next);
