@@ -19,6 +19,25 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
+    bool dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint)
+    {
+        if (gesture == ControlGesture::unknown || ! parameterList.getBounds().contains (localPoint))
+            return false;
+
+        const auto point = parameterList.getLocalPoint (this, localPoint);
+        const auto row = parameterList.getRowContainingPosition (point.x, point.y);
+        if (! juce::isPositiveAndBelow (row, static_cast<int> (parameters.size()))
+            || ! parameters[static_cast<size_t> (row)].automatable)
+            return false;
+
+        juce::String error;
+        const auto ok = processor.addParameterGestureMapping (
+            parameters[static_cast<size_t> (row)].index, gesture, error);
+        if (ok)
+            refreshData (false);
+        return ok;
+    }
+
     void mouseDown (const juce::MouseEvent& event) override
     {
         const auto point = event.getPosition();
