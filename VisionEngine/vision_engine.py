@@ -128,11 +128,6 @@ class GestureVisionEngine:
         RunningMode = mp.tasks.vision.RunningMode
         ClassifierOptions = mp.tasks.components.processors.ClassifierOptions
 
-        # The canned-gesture classifier option field was renamed across
-        # MediaPipe versions: older wheels use the singular
-        # ``canned_gesture_classifier_options`` while newer ones use the
-        # plural ``canned_gestures_classifier_options``. Detect the real field
-        # name so the engine works on either wheel without a source edit.
         import dataclasses as _dataclasses
         _option_fields = {
             f.name for f in _dataclasses.fields(GestureRecognizerOptions)
@@ -280,6 +275,9 @@ class GestureVisionEngine:
 
     def run(self) -> None:
         capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+        if not capture.isOpened():
+            capture.release()
+            capture = cv2.VideoCapture(self.camera_index, cv2.CAP_ANY)
         if not capture.isOpened():
             raise RuntimeError(f"Could not open camera index {self.camera_index}")
 
