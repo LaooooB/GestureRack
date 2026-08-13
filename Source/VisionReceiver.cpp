@@ -151,6 +151,7 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
 
     DualHandVisionSnapshot next;
     next.protocol = protocol;
+    next.sessionId = object->getProperty ("session_id").toString();
     next.sequence = static_cast<int64_t> (object->getProperty ("seq"));
     next.timestampMs = static_cast<int64_t> (object->getProperty ("timestamp_ms"));
     next.receivedAtMs = juce::Time::currentTimeMillis();
