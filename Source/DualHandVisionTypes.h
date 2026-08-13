@@ -31,9 +31,13 @@ struct HandSnapshot
 struct DualHandVisionSnapshot
 {
     int protocol = 2;
+    juce::String sessionId;
     int64_t sequence = 0;
     int64_t timestampMs = 0;
     int64_t receivedAtMs = 0;
+    float captureFps = 0.0f;
+    float visionFps = 0.0f;
+    float captureToResultMs = 0.0f;
     HandSnapshot left;
     HandSnapshot right;
 };
