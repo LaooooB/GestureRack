@@ -16,6 +16,44 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        auto content = getLocalBounds().reduced (24);
+        content.removeFromTop (112);
+        content.removeFromBottom (58);
+        auto panel = content.removeFromLeft (juce::jlimit (300, 420, content.getWidth() * 32 / 100));
+
+        g.setColour (juce::Colour::fromRGB (18, 21, 27));
+        g.fillRoundedRectangle (panel.toFloat(), 14.0f);
+        g.setColour (juce::Colour::fromRGB (226, 231, 238));
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawText ("GESTURE MODULATORS", panel.getX() + 16, panel.getY() + 14,
+                    panel.getWidth() - 32, 20, juce::Justification::centredLeft);
+
+        const auto live = processor.getLiveRightGesture();
+        const std::array<gr::ControlGesture, 7> gestures {
+            gr::ControlGesture::openPalm, gr::ControlGesture::closedFist,
+            gr::ControlGesture::victory, gr::ControlGesture::thumbUp,
+            gr::ControlGesture::thumbDown, gr::ControlGesture::pointRight,
+            gr::ControlGesture::pointLeft
+        };
+        auto row = panel.reduced (16).withTrimmedTop (48).removeFromTop (36);
+        const auto gap = 5;
+        const auto width = juce::jmax (1, (row.getWidth() - gap * 6) / 7);
+        for (const auto gesture : gestures)
+        {
+            auto chip = row.removeFromLeft (width);
+            g.setColour (gesture == live ? juce::Colour::fromRGB (69, 109, 190)
+                                         : juce::Colour::fromRGB (29, 34, 43));
+            g.fillRoundedRectangle (chip.toFloat(), 7.0f);
+            g.setColour (juce::Colour::fromRGB (190, 199, 212));
+            g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+            g.drawFittedText (gr::controlGestureToString (gesture).toUpperCase(), chip.reduced (2),
+                              juce::Justification::centred, 1);
+            row.removeFromLeft (gap);
+        }
+    }
+
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
         for (const auto& path : files)
