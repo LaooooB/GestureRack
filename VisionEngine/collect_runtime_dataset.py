@@ -92,8 +92,12 @@ def main() -> None:
                     continue
 
                 landmarks = right.get("landmarks", [])
+                world_landmarks = right.get("world_landmarks", [])
                 try:
-                    feature = extract_landmark_features(landmarks)
+                    feature = extract_landmark_features(
+                        landmarks,
+                        world_landmarks if world_landmarks else None,
+                    )
                 except ValueError:
                     continue
 
@@ -121,17 +125,16 @@ def main() -> None:
                         "confidence": float(right.get("handedness_confidence", 0.0)),
                     },
                     # The multicast stream contains the production heuristic result,
-                    # not the original MediaPipe canned head. Integrated sidecar
-                    # recordings can preserve the canned value later; training only
-                    # requires features/label and uses heuristic here as the baseline.
+                    # not the original MediaPipe canned head. Training only requires
+                    # features/label and uses heuristic here as the current baseline.
                     "canned": {"gesture": "Unavailable", "confidence": 0.0},
                     "heuristic": {
                         "gesture": str(right.get("raw_gesture", "None")),
                         "confidence": float(right.get("confidence", 0.0)),
                     },
-                    "used_world_landmarks": False,
+                    "used_world_landmarks": bool(feature.used_world_landmarks),
                     "normalized_landmarks": landmarks,
-                    "world_landmarks": [],
+                    "world_landmarks": world_landmarks,
                     "features": feature.values.tolist(),
                     "role_config": role,
                 }
