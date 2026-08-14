@@ -169,13 +169,15 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     addAndMakeVisible (invertButton);
     addAndMakeVisible (mappingEnabledButton);
     addAndMakeVisible (removeMappingButton);
+    addAndMakeVisible (livePresetButton);
+    addAndMakeVisible (smoothPresetButton);
 
     setupNormalized (minSlider, 0.0);
     setupNormalized (maxSlider, 1.0);
     smoothingSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     smoothingSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
     smoothingSlider.setRange (0.0, 1000.0, 1.0);
-    smoothingSlider.setValue (80.0, juce::dontSendNotification);
+    smoothingSlider.setValue (25.0, juce::dontSendNotification);
     smoothingSlider.setTextValueSuffix (" ms");
     deadbandSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     deadbandSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
@@ -221,6 +223,11 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
             refreshData (true);
         }
     };
+    // Smoothing presets set the slider value; onValueChange auto-applies the
+    // new tau to the selected mapping. Live = 25 ms (snappy, the new default);
+    // Smooth = 80 ms (the old gentle default, kept as a one-tap option).
+    livePresetButton.onClick = [this] { smoothingSlider.setValue (25.0, juce::sendNotificationSync); };
+    smoothPresetButton.onClick = [this] { smoothingSlider.setValue (80.0, juce::sendNotificationSync); };
 
     refreshData (true);
     startTimerHz (20);
@@ -365,6 +372,8 @@ void ParameterInspector::updateControlEnablement()
     for (auto* slider : { &minSlider, &maxSlider, &smoothingSlider, &deadbandSlider })
         slider->setEnabled (continuous);
     invertButton.setEnabled (continuous);
+    livePresetButton.setEnabled (continuous);
+    smoothPresetButton.setEnabled (continuous);
     mappingEnabledButton.setEnabled (mappingSelected);
     removeMappingButton.setEnabled (mappingSelected);
 }
@@ -540,6 +549,10 @@ void ParameterInspector::resized()
     mappingEnabledButton.setBounds (second.removeFromLeft (64));
     second.removeFromLeft (8);
     removeMappingButton.setBounds (second.removeFromLeft (84));
+    second.removeFromLeft (8);
+    livePresetButton.setBounds (second.removeFromLeft (54));
+    second.removeFromLeft (4);
+    smoothPresetButton.setBounds (second.removeFromLeft (70));
     second.removeFromLeft (8);
     statusLabel.setBounds (second);
 

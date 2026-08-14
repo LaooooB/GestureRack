@@ -149,6 +149,10 @@ private:
     juce::ToggleButton invertButton { "INV" };
     juce::ToggleButton mappingEnabledButton { "ON" };
     juce::TextButton removeMappingButton { "REMOVE" };
+    // Smoothing presets: Live (25 ms, snappy) is the new default; Smooth
+    // (80 ms) keeps the old gentle response available as a one-tap choice.
+    juce::TextButton livePresetButton { "LIVE" };
+    juce::TextButton smoothPresetButton { "SMOOTH" };
 
     std::array<juce::Rectangle<int>, 7> gestureSourceRects {};
     juce::Rectangle<int> activeDropRect;

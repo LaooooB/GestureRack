@@ -252,8 +252,12 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     juce::String health;
     if (connected)
+        // cam fps / frame-age @ submit / total capture-to-result, then live state.
+        // frame_age_at_submit is the wait-first gating signal: low and stable
+        // means the model always sees the newest frame.
         health = juce::String (snap.captureFps, 0) + "fps"
-               + "  " + juce::String (snap.captureToResultMs, 0) + "ms"
+               + "  fa" + juce::String (snap.frameAgeAtSubmitMs, 0)
+               + "/" + juce::String (snap.captureToResultMs, 0) + "ms"
                + "  |  L" + leftText + "  " + rightEmoji;
     else
         health = "VISION OFFLINE";

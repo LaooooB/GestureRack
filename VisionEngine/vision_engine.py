@@ -122,9 +122,11 @@ class GestureVisionEngine:
         self.lock = threading.Lock()
         self.last_packet = None
 
-        # Telemetry for latency / fps observability.
+        # Telemetry for latency / fps observability. The pending table keeps the
+        # capture + submit timestamps keyed by the MediaPipe timestamp_ms so the
+        # result callback can split frame_age_at_submit / inference / total.
         self.telemetry_lock = threading.Lock()
-        self.submit_capture_ms: dict[int, int] = {}
+        self._pending: dict[int, tuple[int, int]] = {}
         self.capture_fps = 0.0
         self.vision_fps = 0.0
         self.capture_window_started = time.monotonic()
@@ -139,6 +141,10 @@ class GestureVisionEngine:
 
         # one-in-flight gate: keeps the MediaPipe async queue at <= 1 frame so
         # frames can never pile up and produce multi-second stale results.
+        # Note: GestureRecognizer LIVE_STREAM recognize_async returns
+        # immediately and may drop inputs when busy to lower overall latency;
+        # this gate enforces freshness explicitly rather than relying on a
+        # per-frame queue guarantee.
         self._idle = threading.Event()
         self._idle.set()
 
@@ -231,7 +237,7 @@ class GestureVisionEngine:
         self._idle.set()
         result_ms = int(time.monotonic() * 1000)
         with self.telemetry_lock:
-            capture_ms = self.submit_capture_ms.pop(timestamp_ms, timestamp_ms)
+            capture_ms, submit_ms = self._pending.pop(timestamp_ms, (timestamp_ms, timestamp_ms))
             self.vision_window_results += 1
             elapsed = time.monotonic() - self.vision_window_started
             if elapsed >= 1.0:
@@ -241,8 +247,12 @@ class GestureVisionEngine:
             telemetry = {
                 "capture_fps": self.capture_fps,
                 "vision_fps": self.vision_fps,
-                "capture_to_submit_ms": max(0.0, float(timestamp_ms - capture_ms)),
-                "inference_ms": max(0.0, float(result_ms - timestamp_ms)),
+                # frame_age_at_submit: how old the captured image was when it
+                # entered MediaPipe. High values mean we are feeding stale frames.
+                "frame_age_at_submit_ms": max(0.0, float(submit_ms - capture_ms)),
+                # inference_ms is now pure MediaPipe time (result - submit),
+                # excluding the one-in-flight gate wait.
+                "inference_ms": max(0.0, float(result_ms - submit_ms)),
                 "capture_to_result_ms": max(0.0, float(result_ms - capture_ms)),
                 "backend": self.camera_backend,
                 "width": self.camera_width,
@@ -436,11 +446,26 @@ class GestureVisionEngine:
 
         try:
             while True:
+                # one-in-flight gate (wait-first): block until the previous
+                # inference has finished BEFORE snapshotting the latest frame.
+                # The previous order (snapshot -> wait -> submit) let the frame
+                # age by up to one extra inference period while we waited idle,
+                # so the submitted image was already stale. Waiting first means
+                # we always grab the newest frame right at submit time.
+                # Event.wait() returns False on timeout; in that case the model
+                # is stuck, so skip this iteration instead of queuing more work.
+                if not self._idle.wait(timeout=2.0):
+                    continue
+                self._idle.clear()
+
                 with frame_lock:
                     frame = latest_frame
                     sequence = latest_sequence
                     capture_ms = latest_capture_ms
                 if frame is None or sequence == last_consumed_sequence:
+                    # No fresh frame yet; re-arm the gate so we wait for a real
+                    # result callback next time instead of busy-spinning.
+                    self._idle.set()
                     time.sleep(0.001)
                     continue
                 last_consumed_sequence = sequence
@@ -448,23 +473,22 @@ class GestureVisionEngine:
                 frame = cv2.flip(frame, 1)
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 rgb = np.ascontiguousarray(rgb)
-                timestamp_ms = int(time.monotonic() * 1000)
 
+                # timestamp_ms is the MediaPipe per-frame monotonically-
+                # increasing id (used to match result callbacks to submissions).
+                # It MUST be generated after the idle wait so that inference_ms
+                # = result_ms - submit_ms measures pure MediaPipe time, not the
+                # gate wait. capture_to_result stays the true end-to-end figure.
+                submit_ms = int(time.monotonic() * 1000)
+                timestamp_ms = submit_ms
                 if timestamp_ms <= last_submit_ms:
                     timestamp_ms = last_submit_ms + 1
                 last_submit_ms = timestamp_ms
                 with self.telemetry_lock:
-                    self.submit_capture_ms[timestamp_ms] = capture_ms
-                    while len(self.submit_capture_ms) > 16:
-                        oldest = next(iter(self.submit_capture_ms))
-                        self.submit_capture_ms.pop(oldest, None)
-
-                # one-in-flight gate: wait for the previous inference to finish
-                # before submitting the next frame. Without this, recognize_async
-                # queues every submitted frame and, once inference falls behind
-                # capture rate, results lag reality by seconds and grow forever.
-                self._idle.wait(timeout=2.0)
-                self._idle.clear()
+                    self._pending[timestamp_ms] = (capture_ms, submit_ms)
+                    while len(self._pending) > 16:
+                        oldest = next(iter(self._pending))
+                        self._pending.pop(oldest, None)
 
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 try:
@@ -485,6 +509,7 @@ class GestureVisionEngine:
                         cv2.putText(frame,
                                     f"CAM {telemetry.get('capture_fps', 0.0):.1f}  "
                                     f"VISION {telemetry.get('vision_fps', 0.0):.1f}  "
+                                    f"FA {telemetry.get('frame_age_at_submit_ms', 0.0):.0f}ms  "
                                     f"LAT {telemetry.get('capture_to_result_ms', 0.0):.0f}ms",
                                     (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.60, (255, 255, 255), 2, cv2.LINE_AA)

@@ -151,6 +151,7 @@ private:
     gr::RightGestureRuntime rightRuntime;
     int lastVisionStableSlot = 0;
     int64_t lastVisionSequence = 0;
+    juce::String lastVisionSessionId;
 
     juce::AudioProcessorGraph graph;
     gr::RackGraphManager::SlotArray slots;

@@ -47,7 +47,9 @@ GestureRackAudioProcessor::GestureRackAudioProcessor()
     installDefaultMappingsForAllSlots();
     juce::addDefaultFormatsToManager (formatManager);
     graphManager.initialise (juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels()));
-    startTimerHz (50);
+    // 100 Hz control loop: halves the polling quantization vs 50 Hz (0-10 ms
+    // instead of 0-20 ms, ~5 ms average wait). CPU cost for this layer is tiny.
+    startTimerHz (100);
 }
 
 GestureRackAudioProcessor::~GestureRackAudioProcessor()
@@ -112,28 +114,56 @@ void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& 
 
 void GestureRackAudioProcessor::timerCallback()
 {
-    constexpr auto controlDeltaSeconds = 1.0f / 50.0f;
+    constexpr auto controlDeltaSeconds = 1.0f / 100.0f;
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
+
+    // Separate "sidecar alive" (connected, 1500 ms) from "control fresh".
+    // A stalled vision engine can keep the socket warm while serving seconds-
+    // old frames; controlFresh refuses to keep driving parameters from a stale
+    // packet. Packet age beyond 300 ms resets the right-hand runtime and stops
+    // continuous mapping so the plugin does not freeze on the last value.
+    const auto packetAgeMs = snapshot.receivedAtMs > 0
+        ? juce::Time::currentTimeMillis() - snapshot.receivedAtMs
+        : 1000000;
+    const auto controlFresh = connected && packetAgeMs >= 0 && packetAgeMs <= 300;
 
     if (! connected)
     {
         lastVisionStableSlot = 0;
         lastVisionSequence = 0;
+        lastVisionSessionId.clear();
         rightRuntime.reset();
     }
     else
     {
-        if (snapshot.sequence < lastVisionSequence)
+        // A session change means the VisionEngine restarted (seq resets to 1);
+        // treat that as a clean slate, not an out-of-order rollback. Within the
+        // same session, reject backwards/duplicate sequence as a real stale
+        // packet and reset the runtime.
+        const auto sessionChanged = lastVisionSessionId.isNotEmpty()
+                                 && snapshot.sessionId != lastVisionSessionId;
+        if (sessionChanged)
+        {
+            lastVisionStableSlot = 0;
+            lastVisionSequence = 0;
+            rightRuntime.reset();
+        }
+        else if (snapshot.sequence < lastVisionSequence)
         {
             lastVisionStableSlot = 0;
             rightRuntime.reset();
         }
         lastVisionSequence = snapshot.sequence;
+        lastVisionSessionId = snapshot.sessionId;
     }
 
+    // Stale control path: stop driving parameters from an old packet.
+    if (connected && ! controlFresh)
+        rightRuntime.reset();
+
     const auto enabled = gestureEnabled.load (std::memory_order_relaxed);
-    if (enabled && connected)
+    if (enabled && controlFresh)
     {
         const auto stableSlot = snapshot.left.stableSlot;
         if (snapshot.protocol >= 2
@@ -147,14 +177,14 @@ void GestureRackAudioProcessor::timerCallback()
         }
     }
 
-    const auto liveRightGesture = connected && snapshot.right.present
+    const auto liveRightGesture = controlFresh && snapshot.right.present
         ? snapshot.right.stableGesture
         : gr::ControlGesture::unknown;
-    const auto runtimeFrame = rightRuntime.update (connected && snapshot.right.present,
+    const auto runtimeFrame = rightRuntime.update (controlFresh && snapshot.right.present,
                                                    liveRightGesture);
 
     const auto testing = testSignalEnabled.load (std::memory_order_relaxed);
-    if (enabled && connected && ! testing)
+    if (enabled && controlFresh && ! testing)
     {
         const auto slotIndex = getSelectedSlot();
         if (runtimeFrame.entered && runtimeFrame.gesture != gr::ControlGesture::unknown)
@@ -621,6 +651,7 @@ void GestureRackAudioProcessor::clearRackForStateRestore()
     rightRuntime.reset();
     lastVisionStableSlot = 0;
     lastVisionSequence = 0;
+    lastVisionSessionId.clear();
 
     for (auto& generation : slotLoadGenerations)
         generation.fetch_add (1, std::memory_order_relaxed);

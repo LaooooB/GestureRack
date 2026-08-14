@@ -166,6 +166,7 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
     next.protocol = protocol;
     next.sequence = static_cast<int64_t> (object->getProperty ("seq"));
     next.timestampMs = static_cast<int64_t> (object->getProperty ("timestamp_ms"));
+    next.sessionId = object->getProperty ("session_id").toString();
     next.receivedAtMs = juce::Time::currentTimeMillis();
 
     if (protocol == 1)
@@ -181,6 +182,8 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
                 next.captureFps = static_cast<float> (t->getProperty ("capture_fps"));
                 next.visionFps = static_cast<float> (t->getProperty ("vision_fps"));
                 next.captureToResultMs = static_cast<float> (t->getProperty ("capture_to_result_ms"));
+                next.frameAgeAtSubmitMs = static_cast<float> (t->getProperty ("frame_age_at_submit_ms"));
+                next.inferenceMs = static_cast<float> (t->getProperty ("inference_ms"));
                 next.cameraBackend = t->getProperty ("backend").toString();
             }
         }

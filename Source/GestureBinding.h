@@ -46,7 +46,11 @@ struct GestureBinding
 
     float minValue = 0.0f;
     float maxValue = 1.0f;
-    float smoothingMs = 80.0f;
+    // smoothingMs is the one-EMA time constant tau, NOT a hard cap. tau=80ms
+    // takes ~240ms to reach 95% of a step; tau=25ms reaches it in ~75ms. The
+    // default is the snappy Live value; 80ms remains available as a Smooth
+    // preset via the ParameterInspector smoothing control.
+    float smoothingMs = 25.0f;
     float deadband = 0.008f;
     bool inverted = false;
     bool enabled = true;
