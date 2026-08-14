@@ -33,6 +33,7 @@ def default_model_path() -> Path:
     return _resource_dir() / "models" / "gesture_recognizer.task"
 
 
+from continuous_motion import HeightMotionFilter
 from gesture_stabilizer import GestureStabilizer
 from hand_role_calibration import RightHandCalibration
 from hand_role_resolver import DetectedHand, HandRoleResolver
@@ -98,6 +99,7 @@ def empty_right_packet(stable_gesture: str = "None") -> dict:
         "palm_x": 0.5,
         "palm_y": 0.5,
         "palm_z": 0.0,
+        "height_raw": 0.5,
         "height": 0.5,
         "landmarks": [],
     }
@@ -131,6 +133,7 @@ class GestureVisionEngine:
         )
         self.left_stabilizer = SlotStabilizer(hold_ms=slot_hold_ms, min_confidence=slot_confidence)
         self.role_resolver = HandRoleResolver(swap_handedness=bool(swap_handedness))
+        self.height_motion_filter = HeightMotionFilter()
         self.sequence = 0
         self.session_id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
@@ -275,6 +278,7 @@ class GestureVisionEngine:
     def _reset_role_dependent_state_locked(self) -> None:
         self.role_resolver.reset()
         self.right_stabilizer.reset()
+        self.height_motion_filter.reset()
         self.left_stabilizer.stable = 0
         self.left_stabilizer.candidate = 0
         self.left_stabilizer.candidate_since_ms = 0
@@ -426,7 +430,8 @@ class GestureVisionEngine:
             )
             stable = self.right_stabilizer.update(
                 classification.gesture, classification.confidence, timestamp_ms)
-            palm_x, palm_y, palm_z, height = palm_metrics(right_hand.landmarks)
+            palm_x, palm_y, palm_z, raw_height = palm_metrics(right_hand.landmarks)
+            filtered_height = self.height_motion_filter.update(raw_height, timestamp_ms)
             right_packet = {
                 "present": True,
                 "handedness_confidence": right_hand.handedness_confidence,
@@ -436,10 +441,12 @@ class GestureVisionEngine:
                 "palm_x": palm_x,
                 "palm_y": palm_y,
                 "palm_z": palm_z,
-                "height": height,
+                "height_raw": raw_height,
+                "height": filtered_height,
                 "landmarks": right_hand.landmarks,
             }
         else:
+            self.height_motion_filter.reset()
             stable = self.right_stabilizer.update("None", 0.0, timestamp_ms)
             right_packet = empty_right_packet(stable)
 
