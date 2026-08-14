@@ -23,6 +23,8 @@ struct HandSnapshot
     float palmX = 0.5f;
     float palmY = 0.5f;
     float palmZ = 0.0f;
+    float rawHeight = 0.5f;
+    // Height is the dedicated One Euro filtered continuous-control signal.
     float height = 0.5f;
 
     std::array<HandPoint, 21> landmarks {};
@@ -43,9 +45,6 @@ struct DualHandVisionSnapshot
     float inferenceMs = 0.0f;
     juce::String cameraBackend;
 
-    // Physical-role calibration state comes from the vision sidecar. It is kept
-    // in the same snapshot as landmarks so the editor never guesses whether
-    // Left/Right is currently normal, swapped, or calibrating.
     bool swapHandedness = false;
     bool handCalibrationActive = false;
     int handCalibrationSamples = 0;
