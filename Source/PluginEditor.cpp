@@ -372,13 +372,20 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     juce::String health;
     if (connected)
+    {
         health = juce::String (snapshot.captureFps, 0) + "fps"
                + "  fa" + juce::String (snapshot.frameAgeAtSubmitMs, 0)
                + "/" + juce::String (snapshot.captureToResultMs, 0) + "ms"
                + "  |  " + (snapshot.swapHandedness ? juce::String ("L/R SWAP") : juce::String ("L/R OK"))
                + "  |  L" + leftText + "  " + rightEmoji;
+        if (snapshot.shadowModelLoaded && snapshot.shadowSamples > 0)
+            health += "  |  SH " + juce::String (snapshot.shadowAgreementRate * 100.0f, 0)
+                    + "% " + juce::String (snapshot.shadowP95InferenceMs, 2) + "ms";
+    }
     else
+    {
         health = "VISION OFFLINE";
+    }
 
     g.setColour (connected ? kGreen : kRed);
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
@@ -468,6 +475,26 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     if (! snapshot.handRoleSource.isEmpty() && ! snapshot.handCalibrationActive)
         roleText += "  /  " + snapshot.handRoleSource;
     g.drawFittedText (roleText, infoArea.removeFromTop (20), juce::Justification::centredLeft, 1);
+
+    if (snapshot.shadowModelLoaded)
+    {
+        auto shadowText = juce::String ("SHADOW: ");
+        if (snapshot.right.shadowAvailable)
+        {
+            shadowText += gr::controlGestureToString (snapshot.right.shadowGesture).toUpperCase()
+                       + " " + juce::String (snapshot.right.shadowConfidence * 100.0f, 0) + "%"
+                       + (snapshot.right.shadowAgrees ? "  AGREE" : "  DIFF")
+                       + "  " + juce::String (snapshot.right.shadowInferenceMs, 2) + "ms";
+        }
+        else
+        {
+            shadowText += "WAITING FOR RIGHT HAND";
+        }
+
+        g.setColour (snapshot.right.shadowAvailable && ! snapshot.right.shadowAgrees ? kAccent : kSecondary);
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+        g.drawFittedText (shadowText, infoArea.removeFromTop (18), juce::Justification::centredLeft, 1);
+    }
 
     const auto selected = processor.getSelectedSlot();
     const auto loaded = processor.isSlotLoaded (selected);
