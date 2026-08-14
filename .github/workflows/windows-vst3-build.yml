@@ -17,7 +17,7 @@ jobs:
 
       - name: Run vision regression tests
         working-directory: VisionEngine
-        run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py
+        run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py
 
       - name: Configure JUCE project
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=ON
