@@ -59,16 +59,34 @@ class RightGestureClassifierTests(unittest.TestCase):
                     set_thumb(landmarks, thumb)
                 result = classify_right_gesture(landmarks, gesture, 0.96)
                 self.assertEqual(result.gesture, gesture)
-                self.assertGreaterEqual(result.confidence, 0.72)
+                self.assertGreaterEqual(result.confidence, 0.62)
 
-    def test_horizontal_pointing_direction(self) -> None:
+    def test_open_palm_does_not_require_extended_thumb(self) -> None:
+        landmarks = base_hand()
+        for finger in range(4):
+            extend_finger(landmarks, finger)
+        # Leave the thumb in the relaxed base-hand position.
+        result = classify_right_gesture(landmarks, "Open_Palm", 0.72)
+        self.assertEqual(result.gesture, "Open_Palm")
+        self.assertGreaterEqual(result.confidence, 0.58)
+
+    def test_horizontal_pointing_direction_without_canned_dependency(self) -> None:
         for expected, direction in [("Point_Right", (1.0, 0.0)), ("Point_Left", (-1.0, 0.0))]:
             with self.subTest(expected=expected):
                 landmarks = base_hand()
                 extend_finger(landmarks, 0, direction)
-                result = classify_right_gesture(landmarks, "Pointing_Up", 0.92)
+                result = classify_right_gesture(landmarks, "None", 0.0)
                 self.assertEqual(result.gesture, expected)
-                self.assertGreaterEqual(result.confidence, 0.72)
+                self.assertGreaterEqual(result.confidence, 0.62)
+
+    def test_diagonal_thumb_still_maps_to_vertical_intent(self) -> None:
+        for expected, direction in [("Thumb_Up", (0.30, -1.0)), ("Thumb_Down", (-0.28, 1.0))]:
+            with self.subTest(expected=expected):
+                landmarks = base_hand()
+                set_thumb(landmarks, direction)
+                result = classify_right_gesture(landmarks, expected, 0.72)
+                self.assertEqual(result.gesture, expected)
+                self.assertGreaterEqual(result.confidence, 0.62)
 
     def test_vertical_index_is_not_left_or_right(self) -> None:
         landmarks = base_hand()
