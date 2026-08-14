@@ -68,6 +68,11 @@ public:
     gr::VisionSnapshot getVisionSnapshot() const { return vision.getSnapshot(); }
     gr::DualHandVisionSnapshot getDualHandVisionSnapshot() const { return vision.getDualHandSnapshot(); }
     bool isVisionConnected() const { return vision.isConnected(); }
+    bool beginHandCalibration() { return vision.beginHandCalibration(); }
+    bool cancelHandCalibration() { return vision.cancelHandCalibration(); }
+    bool setSwapHandedness (bool shouldSwap) { return vision.setSwapHandedness (shouldSwap); }
+    bool toggleSwapHandedness() { return vision.toggleSwapHandedness(); }
+
     bool isGestureEnabled() const noexcept { return gestureEnabled.load (std::memory_order_relaxed); }
     void setGestureEnabled (bool enabled) noexcept;
     bool isGestureBypassed() const noexcept { return isSlotBypassed (getSelectedSlot()); }
