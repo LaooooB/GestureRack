@@ -37,6 +37,7 @@ from gesture_stabilizer import GestureStabilizer
 from hand_role_calibration import RightHandCalibration
 from hand_role_resolver import DetectedHand, HandRoleResolver
 from right_gesture_classifier import RIGHT_GESTURES, classify_right_gesture
+from shared_frame import SHM_NAME, SharedFrameWriter
 from slot_selector import SlotStabilizer, classify_slot_1_to_5
 from vision_profile import VisionProfileStore
 
@@ -149,6 +150,12 @@ class GestureVisionEngine:
         self.camera_fps = 0.0
         self.camera_fourcc = ""
 
+        self.frame_writer: SharedFrameWriter | None = None
+        try:
+            self.frame_writer = SharedFrameWriter()
+        except (OSError, FileExistsError) as exc:
+            print(f"Shared camera frame transport unavailable: {exc}")
+
         self._idle = threading.Event()
         self._idle.set()
 
@@ -241,6 +248,29 @@ class GestureVisionEngine:
             ))
 
         return hands
+
+    def _publish_callback_frame(self, output_image, timestamp_ms: int) -> bool:
+        """Publish the exact image MediaPipe used for this callback.
+
+        Landmarks in the same callback are normalized against this image, so the
+        VST3 can draw them directly over the frame without temporal or geometric
+        drift. This is intentionally not the newest capture-thread frame.
+        """
+        if self.frame_writer is None or output_image is None:
+            return False
+        try:
+            rgb = np.asarray(output_image.numpy_view())
+            if rgb.ndim != 3 or rgb.shape[2] < 3:
+                return False
+            rgb = rgb[:, :, :3]
+            if not rgb.flags.c_contiguous:
+                rgb = np.ascontiguousarray(rgb)
+            height, width = rgb.shape[:2]
+            stride = int(rgb.strides[0])
+            return self.frame_writer.publish_rgb(
+                memoryview(rgb).cast("B"), width, height, stride, timestamp_ms)
+        except (BufferError, ValueError, TypeError, OSError):
+            return False
 
     def _reset_role_dependent_state_locked(self) -> None:
         self.role_resolver.reset()
@@ -336,9 +366,10 @@ class GestureVisionEngine:
                 pass
             self.control_socket = None
 
-    def _on_result(self, result, _output_image, timestamp_ms: int) -> None:
+    def _on_result(self, result, output_image, timestamp_ms: int) -> None:
         self._idle.set()
         result_ms = int(time.monotonic() * 1000)
+        frame_published = self._publish_callback_frame(output_image, timestamp_ms)
         with self.telemetry_lock:
             capture_ms, submit_ms = self._pending.pop(timestamp_ms, (timestamp_ms, timestamp_ms))
             self.vision_window_results += 1
@@ -358,6 +389,8 @@ class GestureVisionEngine:
                 "height": self.camera_height,
                 "fps": self.camera_fps,
                 "fourcc": self.camera_fourcc,
+                "shared_frame": frame_published,
+                "shared_frame_name": SHM_NAME,
             }
 
         detections = self._extract_hands(result)
@@ -547,6 +580,7 @@ class GestureVisionEngine:
         print(f"Camera: {self.camera_backend} {self.camera_width}x{self.camera_height} "
               f"{self.camera_fps:.1f} FPS {self.camera_fourcc}")
         print(f"Hand roles: {role_text} ({role_source})")
+        print(f"Plugin camera transport: {SHM_NAME}")
         print("Capture keeps only the newest frame; inference is one-in-flight")
         print("Tracking physical left and right hands independently")
         print("Left hand classifies Slot 1-5 only; Slot 6-9 remain mouse-selectable")
@@ -637,6 +671,11 @@ class GestureVisionEngine:
                 cv2.destroyAllWindows()
             self.recognizer.close()
             self.sock.close()
+            if self.frame_writer is not None:
+                try:
+                    self.frame_writer.close(unlink=True)
+                except (BufferError, OSError):
+                    pass
 
 
 def main() -> None:
