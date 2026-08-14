@@ -12,7 +12,6 @@ constexpr std::array<std::pair<int, int>, 21> handConnections {{
     {17,0}
 }};
 
-// Snap Heap light palette
 const juce::Colour kBg        { 224, 228, 234 };
 const juce::Colour kCard      { 247, 248, 250 };
 const juce::Colour kCardBorder{ 205, 210, 218 };
@@ -20,7 +19,6 @@ const juce::Colour kRecessed  { 235, 238, 242 };
 const juce::Colour kTitle     { 45, 48, 56 };
 const juce::Colour kSecondary { 130, 136, 148 };
 const juce::Colour kAccent    { 245, 178, 60 };
-const juce::Colour kAccentText{ 60, 42, 12 };
 const juce::Colour kBlue      { 80, 140, 220 };
 const juce::Colour kGreen     { 92, 180, 120 };
 const juce::Colour kRed       { 215, 80, 80 };
@@ -53,7 +51,17 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     addAndMakeVisible (removeButton);
     addAndMakeVisible (bypassButton);
     addAndMakeVisible (enableButton);
+    addAndMakeVisible (calibrateHandsButton);
+    addAndMakeVisible (swapHandsButton);
     addAndMakeVisible (parameterInspector);
+
+    for (auto* button : { &loadButton, &openButton, &removeButton, &bypassButton,
+                          &enableButton, &calibrateHandsButton, &swapHandsButton })
+    {
+        button->setColour (juce::TextButton::buttonColourId, juce::Colour (255, 255, 255));
+        button->setColour (juce::TextButton::textColourOffId, kTitle);
+        button->setColour (juce::TextButton::textColourOnId, kTitle);
+    }
 
     loadButton.onClick = [this] { choosePluginForSelectedSlot(); };
     openButton.onClick = [this] { processor.openChildEditor(); };
@@ -67,6 +75,14 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     {
         processor.setGestureEnabled (! processor.isGestureEnabled());
         repaint();
+    };
+    calibrateHandsButton.onClick = [this]
+    {
+        processor.beginHandCalibration();
+    };
+    swapHandsButton.onClick = [this]
+    {
+        processor.toggleSwapHandedness();
     };
 
     updateSlotButtons();
@@ -83,13 +99,20 @@ void GestureRackAudioProcessorEditor::timerCallback()
     const auto selected = processor.getSelectedSlot();
     const auto loaded = processor.isSlotLoaded (selected);
     const auto bypassed = processor.isSlotBypassed (selected);
+    const auto vision = processor.getDualHandVisionSnapshot();
+    const auto connected = processor.isVisionConnected();
 
     enableButton.setButtonText (processor.isGestureEnabled() ? "GESTURE ON" : "GESTURE OFF");
     bypassButton.setButtonText (bypassed ? "BYPASSED" : "ACTIVE");
+    calibrateHandsButton.setButtonText (vision.handCalibrationActive ? "SHOW RIGHT HAND..."
+                                                                      : "CALIBRATE RIGHT");
+    swapHandsButton.setButtonText (vision.swapHandedness ? "L/R SWAPPED" : "SWAP L/R");
 
     openButton.setEnabled (loaded);
     removeButton.setEnabled (loaded);
     bypassButton.setEnabled (loaded);
+    calibrateHandsButton.setEnabled (connected && ! vision.handCalibrationActive);
+    swapHandsButton.setEnabled (connected && ! vision.handCalibrationActive);
 
     updateSlotButtons();
     repaint();
@@ -236,12 +259,10 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (kBg);
 
-    // title (minimal)
     g.setColour (kTitle);
     g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
     g.drawText ("GESTURE RACK", 24, 12, 260, 34, juce::Justification::centredLeft);
 
-    // compact health line
     const auto snap = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
     const auto rightEmoji = snap.right.present
@@ -252,12 +273,10 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     juce::String health;
     if (connected)
-        // cam fps / frame-age @ submit / total capture-to-result, then live state.
-        // frame_age_at_submit is the wait-first gating signal: low and stable
-        // means the model always sees the newest frame.
         health = juce::String (snap.captureFps, 0) + "fps"
                + "  fa" + juce::String (snap.frameAgeAtSubmitMs, 0)
                + "/" + juce::String (snap.captureToResultMs, 0) + "ms"
+               + "  |  " + (snap.swapHandedness ? juce::String ("L/R SWAP") : juce::String ("L/R OK"))
                + "  |  L" + leftText + "  " + rightEmoji;
     else
         health = "VISION OFFLINE";
@@ -274,7 +293,6 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     auto left = content.removeFromLeft (juce::jlimit (300, 420, content.getWidth() * 32 / 100));
     content.removeFromLeft (12);
 
-    // left card
     g.setColour (kCard);
     g.fillRoundedRectangle (left.toFloat(), 14.0f);
     g.setColour (kCardBorder);
@@ -282,7 +300,7 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     const auto snapshot = processor.getDualHandVisionSnapshot();
     auto handArea = left.reduced (16);
-    auto infoArea = handArea.removeFromBottom (96);
+    auto infoArea = handArea.removeFromBottom (116);
     const auto handGap = 8;
     auto leftHandArea = handArea.removeFromTop ((handArea.getHeight() - handGap) / 2);
     handArea.removeFromTop (handGap);
@@ -301,6 +319,15 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
         : (processor.isGestureBypassed() ? kRed : kGreen);
     drawHand (g, rightHandArea.toFloat(), snapshot.right, connected,
               rightColour, rightArmed ? "\xE2\x9C\x8A CONTROL" : "\xE2\x9C\x8A ARM");
+
+    g.setColour (snapshot.handCalibrationActive ? kAccent : kSecondary);
+    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    auto roleText = snapshot.handCalibrationActive
+        ? snapshot.handCalibrationStatus + "  " + juce::String (snapshot.handCalibrationSamples)
+        : (snapshot.swapHandedness ? juce::String ("HANDS: SWAPPED") : juce::String ("HANDS: NORMAL"));
+    if (! snapshot.handRoleSource.isEmpty() && ! snapshot.handCalibrationActive)
+        roleText += "  /  " + snapshot.handRoleSource;
+    g.drawFittedText (roleText, infoArea.removeFromTop (20), juce::Justification::centredLeft, 1);
 
     const auto selected = processor.getSelectedSlot();
     const auto loaded = processor.isSlotLoaded (selected);
@@ -427,4 +454,8 @@ void GestureRackAudioProcessorEditor::resized()
     bypassButton.setBounds (bottom.removeFromLeft (100));
     bottom.removeFromLeft (8);
     enableButton.setBounds (bottom.removeFromLeft (120));
+    bottom.removeFromLeft (12);
+    calibrateHandsButton.setBounds (bottom.removeFromLeft (150));
+    bottom.removeFromLeft (8);
+    swapHandsButton.setBounds (bottom.removeFromLeft (110));
 }
