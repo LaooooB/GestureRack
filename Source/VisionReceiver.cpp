@@ -139,9 +139,9 @@ DualHandVisionSnapshot VisionReceiver::getDualHandSnapshot() const
 
 bool VisionReceiver::isConnected() const
 {
-    const auto current = getDualHandSnapshot();
+    const auto receivedAtMs = lastPacketReceivedAtMs.load (std::memory_order_relaxed);
     const auto now = juce::Time::currentTimeMillis();
-    return current.receivedAtMs > 0 && (now - current.receivedAtMs) < 1500;
+    return receivedAtMs > 0 && (now - receivedAtMs) < 1500;
 }
 
 bool VisionReceiver::sendControlCommand (const juce::var& command)
@@ -215,12 +215,14 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
     if (protocol != 1 && protocol != 2)
         return;
 
+    const auto wallReceiveMs = juce::Time::currentTimeMillis();
+
     DualHandVisionSnapshot next;
     next.protocol = protocol;
     next.sequence = static_cast<int64_t> (object->getProperty ("seq"));
     next.timestampMs = static_cast<int64_t> (object->getProperty ("timestamp_ms"));
     next.sessionId = object->getProperty ("session_id").toString();
-    next.receivedAtMs = juce::Time::currentTimeMillis();
+    next.receivedAtMs = wallReceiveMs;
 
     if (protocol == 1)
     {
@@ -247,6 +249,17 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
             }
         }
 
+        // receivedAtMs is used by the processor as the age of the control data,
+        // not merely the age of the UDP datagram. Fold the measured camera-to-
+        // result latency into it so a sidecar that is still sending packets but
+        // is processing an old camera backlog cannot continue automating the rack.
+        if (next.captureToResultMs > 0.0f)
+        {
+            const auto pipelineAgeMs = juce::roundToInt (
+                juce::jlimit (0.0f, 10000.0f, next.captureToResultMs));
+            next.receivedAtMs -= static_cast<int64_t> (pipelineAgeMs);
+        }
+
         if (const auto roleVar = object->getProperty ("role_config"); roleVar.isObject())
         {
             if (auto* role = roleVar.getDynamicObject())
@@ -265,6 +278,9 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
         if (const auto rightVar = object->getProperty ("right"); rightVar.isObject())
             parseHand (rightVar.getDynamicObject(), next.right);
     }
+
+    // Liveness tracks actual packet arrival independently from control-data age.
+    lastPacketReceivedAtMs.store (wallReceiveMs, std::memory_order_relaxed);
 
     const juce::SpinLock::ScopedLockType lock (snapshotLock);
     const auto sameSession = snapshot.sessionId.isNotEmpty()
