@@ -9,7 +9,10 @@ from pathlib import Path
 
 from gesture_dataset import RIGHT_DATASET_LABELS, default_dataset_dir
 from landmark_features import FEATURE_VERSION, extract_landmark_features
-from vision_engine import MULTICAST_ADDRESS, MULTICAST_PORT
+
+
+MULTICAST_ADDRESS = "239.255.71.77"
+MULTICAST_PORT = 17777
 
 
 def open_multicast_socket() -> socket.socket:
