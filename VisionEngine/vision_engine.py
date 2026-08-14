@@ -33,13 +33,19 @@ def default_model_path() -> Path:
     return _resource_dir() / "models" / "gesture_recognizer.task"
 
 
+def default_shadow_model_path() -> Path:
+    return _resource_dir() / "models" / "right_gesture_landmark_v1.npz"
+
+
 from continuous_motion import HeightMotionFilter
 from gesture_stabilizer import GestureStabilizer
 from hand_role_calibration import RightHandCalibration
 from hand_role_resolver import DetectedHand, HandRoleResolver
 from right_gesture_classifier import RIGHT_GESTURES, classify_right_gesture
+from shadow_evaluator import ShadowGestureEvaluator
 from shared_frame import SHM_NAME, SharedFrameWriter
 from slot_selector import SlotStabilizer, classify_slot_1_to_5
+from tiny_landmark_classifier import TinyLandmarkClassifier
 from vision_profile import VisionProfileStore
 
 MODEL_URL = (
@@ -102,6 +108,15 @@ def empty_right_packet(stable_gesture: str = "None") -> dict:
         "height_raw": 0.5,
         "height": 0.5,
         "landmarks": [],
+        "world_landmarks": [],
+        "shadow": {
+            "available": False,
+            "gesture": "None",
+            "confidence": 0.0,
+            "margin": 0.0,
+            "inference_ms": 0.0,
+            "agrees": False,
+        },
     }
 
 
@@ -110,7 +125,7 @@ class GestureVisionEngine:
                  confidence: float, hold_ms: int, release_ms: int, preview: bool,
                  swap_handedness: bool | None, slot_confidence: float,
                  slot_hold_ms: int, backend: str = "auto", profile_path: Path | None = None,
-                 calibrate_right: bool = False):
+                 calibrate_right: bool = False, shadow_model_path: Path | None = None):
         self.model_path = model_path
         self.camera_index = camera_index
         self.width = width
@@ -138,6 +153,13 @@ class GestureVisionEngine:
         self.session_id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
         self.last_packet = None
+
+        self.shadow_model_path = Path(shadow_model_path) if shadow_model_path is not None else None
+        shadow_model = (
+            TinyLandmarkClassifier.load_optional(self.shadow_model_path)
+            if self.shadow_model_path is not None else None
+        )
+        self.shadow_evaluator = ShadowGestureEvaluator(shadow_model)
 
         self.telemetry_lock = threading.Lock()
         self._pending: dict[int, tuple[int, int]] = {}
@@ -428,6 +450,11 @@ class GestureVisionEngine:
                 right_hand.raw_gesture,
                 right_hand.gesture_confidence,
             )
+            shadow = self.shadow_evaluator.evaluate(
+                right_hand.landmarks,
+                classification.gesture,
+                right_hand.world_landmarks,
+            )
             stable = self.right_stabilizer.update(
                 classification.gesture, classification.confidence, timestamp_ms)
             palm_x, palm_y, palm_z, raw_height = palm_metrics(right_hand.landmarks)
@@ -444,11 +471,30 @@ class GestureVisionEngine:
                 "height_raw": raw_height,
                 "height": filtered_height,
                 "landmarks": right_hand.landmarks,
+                "world_landmarks": right_hand.world_landmarks,
+                "shadow": {
+                    "available": shadow.available,
+                    "gesture": shadow.model_gesture,
+                    "confidence": shadow.confidence,
+                    "margin": shadow.margin,
+                    "inference_ms": shadow.inference_ms,
+                    "agrees": shadow.agrees,
+                },
             }
         else:
             self.height_motion_filter.reset()
             stable = self.right_stabilizer.update("None", 0.0, timestamp_ms)
             right_packet = empty_right_packet(stable)
+
+        shadow_summary = self.shadow_evaluator.stats.summary()
+        telemetry.update({
+            "shadow_model_loaded": self.shadow_evaluator.available,
+            "shadow_samples": shadow_summary["samples"],
+            "shadow_agreement_rate": shadow_summary["agreement_rate"],
+            "shadow_disagreement_rate": shadow_summary["disagreement_rate"],
+            "shadow_mean_inference_ms": shadow_summary["mean_inference_ms"],
+            "shadow_p95_inference_ms": shadow_summary["p95_inference_ms"],
+        })
 
         self.sequence += 1
         packet = {
@@ -588,6 +634,12 @@ class GestureVisionEngine:
               f"{self.camera_fps:.1f} FPS {self.camera_fourcc}")
         print(f"Hand roles: {role_text} ({role_source})")
         print(f"Plugin camera transport: {SHM_NAME}")
+        if self.shadow_evaluator.available:
+            print(f"Tiny classifier: SHADOW ONLY ({self.shadow_model_path})")
+        elif self.shadow_model_path is not None:
+            print(f"Tiny classifier: shadow model unavailable ({self.shadow_model_path})")
+        else:
+            print("Tiny classifier: shadow disabled")
         print("Capture keeps only the newest frame; inference is one-in-flight")
         print("Tracking physical left and right hands independently")
         print("Left hand classifies Slot 1-5 only; Slot 6-9 remain mouse-selectable")
@@ -659,6 +711,14 @@ class GestureVisionEngine:
                                     f"{role.get('calibration_status', '')}",
                                     (18, 60), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.52, (255, 255, 255), 1, cv2.LINE_AA)
+                        if telemetry.get("shadow_model_loaded", False):
+                            cv2.putText(
+                                frame,
+                                f"SHADOW {telemetry.get('shadow_agreement_rate', 0.0) * 100.0:.1f}% agree  "
+                                f"p95 {telemetry.get('shadow_p95_inference_ms', 0.0):.3f}ms",
+                                (18, 84), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.50, (255, 255, 255), 1, cv2.LINE_AA,
+                            )
 
                     cv2.imshow("Gesture Vision Engine v2", frame)
                     if cv2.waitKey(1) & 0xFF == 27:
@@ -733,6 +793,15 @@ def main() -> None:
         type=Path,
         default=default_model_path(),
     )
+    parser.add_argument(
+        "--shadow-model",
+        type=Path,
+        default=None,
+        help=(
+            "Optional tiny landmark model. Runs in shadow mode only: predictions are logged/telemetried "
+            "but never drive stable gestures or rack control."
+        ),
+    )
     args = parser.parse_args()
 
     ensure_model(args.model)
@@ -751,6 +820,7 @@ def main() -> None:
         backend=args.backend,
         profile_path=args.profile,
         calibrate_right=args.calibrate_right,
+        shadow_model_path=args.shadow_model,
     )
     engine.run()
 
