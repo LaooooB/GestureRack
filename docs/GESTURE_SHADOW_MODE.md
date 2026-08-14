@@ -8,9 +8,32 @@ Shadow mode evaluates a trained tiny landmark classifier against the current pro
 2. Calibrate physical hand roles with `CALIBRATE RIGHT` before collecting or judging results.
 3. Train/export a candidate model to `VisionEngine/models/right_gesture_landmark_v1.npz`, or pass another model path explicitly.
 
-## Run
+## Integrated shadow mode
 
-From `VisionEngine/`:
+The preferred path is now to run the candidate inside the normal sidecar:
+
+```text
+python vision_engine.py --shadow-model models/right_gesture_landmark_v1.npz
+```
+
+The production heuristic still owns `raw_gesture`, the gesture stabilizer, slot actions, and parameter mappings. The tiny model only produces a parallel `shadow` result. It cannot change the stable gesture or control the rack.
+
+The sidecar publishes these aggregate telemetry fields:
+
+- `shadow_model_loaded`
+- `shadow_samples`
+- `shadow_agreement_rate`
+- `shadow_disagreement_rate`
+- `shadow_mean_inference_ms`
+- `shadow_p95_inference_ms`
+
+The right-hand packet also contains the current tiny-model gesture, confidence, top-two margin, inference time, and agreement flag. The VST3 displays live shadow agreement and p95 model cost in its health UI when a shadow model is enabled.
+
+Shadow inference is deliberately **disabled by default**. This keeps the production control path free of learned-model cost until a candidate is explicitly being evaluated.
+
+## Standalone shadow monitor
+
+A second evaluation path remains available from `VisionEngine/`:
 
 ```text
 python shadow_monitor.py
@@ -26,9 +49,11 @@ python shadow_monitor.py --output C:\temp\gesture-shadow.jsonl
 
 The monitor listens to the same protocol-v2 multicast stream already produced by the production sidecar. It does **not** open another camera and it does **not** modify the stable gesture sent to the rack.
 
+The protocol-v2 right-hand packet now carries both normalized landmarks and MediaPipe world landmarks. The standalone monitor uses world landmarks when they are present, matching the feature path used by the integrated shadow evaluator and the production-stream dataset collector.
+
 ## Per-frame comparison
 
-For every resolved physical-right frame, the monitor records:
+For every resolved physical-right frame, shadow evaluation records or exposes:
 
 - production heuristic gesture and confidence
 - tiny-model gesture
@@ -39,11 +64,11 @@ For every resolved physical-right frame, the monitor records:
 - sidecar session ID and sequence
 - physical-role configuration source
 
-The output is JSONL so disagreements can be inspected without losing temporal order.
+The standalone monitor writes JSONL so disagreements can be inspected without losing temporal order.
 
 ## Session boundaries
 
-A VisionEngine restart creates a new `session_id`. Shadow statistics reset at that boundary and the previous session summary is retained. Do not merge adjacent frames from multiple sessions and call that an independent test split; evaluate complete sessions.
+A VisionEngine restart creates a new `session_id`. Standalone shadow statistics reset at that boundary and the previous session summary is retained. Do not merge adjacent frames from multiple sessions and call that an independent test split; evaluate complete sessions.
 
 ## What the live agreement number means
 
@@ -65,4 +90,4 @@ The learned model remains non-authoritative until all of the following are true:
 3. Disagreement logs have been reviewed on real camera sessions.
 4. Class-specific failure cases have acceptable recall, especially `None` hard negatives and the directional gestures.
 
-Only after those checks should the model be integrated into the production VisionEngine path. Until then, current heuristic/canned fusion remains the source of control events.
+Only after those checks should the model be integrated into the production control path. Until then, current heuristic/canned fusion remains the source of control events.
