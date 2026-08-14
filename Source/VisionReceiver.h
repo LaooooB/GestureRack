@@ -9,7 +9,9 @@ class VisionReceiver final : private juce::Thread
 {
 public:
     static constexpr int port = 17777;
+    static constexpr int controlPort = 17778;
     static constexpr const char* multicastAddress = "239.255.71.77";
+    static constexpr const char* controlAddress = "127.0.0.1";
 
     VisionReceiver();
     ~VisionReceiver() override;
@@ -18,12 +20,19 @@ public:
     DualHandVisionSnapshot getDualHandSnapshot() const;
     bool isConnected() const;
 
+    bool beginHandCalibration();
+    bool cancelHandCalibration();
+    bool setSwapHandedness (bool shouldSwap);
+    bool toggleSwapHandedness();
+
 private:
     void run() override;
     void parsePacket (const juce::String& jsonText);
+    bool sendControlCommand (const juce::var& command);
 
     mutable juce::SpinLock snapshotLock;
     DualHandVisionSnapshot snapshot;
     juce::DatagramSocket socket { false };
+    juce::DatagramSocket commandSocket { false };
 };
 }
