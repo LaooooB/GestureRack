@@ -34,9 +34,11 @@ def default_model_path() -> Path:
 
 
 from gesture_stabilizer import GestureStabilizer
+from hand_role_calibration import RightHandCalibration
 from hand_role_resolver import DetectedHand, HandRoleResolver
 from right_gesture_classifier import RIGHT_GESTURES, classify_right_gesture
 from slot_selector import SlotStabilizer, classify_slot_1_to_5
+from vision_profile import VisionProfileStore
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/"
@@ -44,6 +46,8 @@ MODEL_URL = (
 )
 MULTICAST_ADDRESS = "239.255.71.77"
 MULTICAST_PORT = 17777
+CONTROL_ADDRESS = "127.0.0.1"
+CONTROL_PORT = 17778
 PROTOCOL_VERSION = 2
 ALLOWED_RIGHT_GESTURES = RIGHT_GESTURES
 
@@ -101,14 +105,23 @@ def empty_right_packet(stable_gesture: str = "None") -> dict:
 class GestureVisionEngine:
     def __init__(self, model_path: Path, camera_index: int, width: int, height: int,
                  confidence: float, hold_ms: int, release_ms: int, preview: bool,
-                 swap_handedness: bool, slot_confidence: float,
-                 slot_hold_ms: int, backend: str = "auto"):
+                 swap_handedness: bool | None, slot_confidence: float,
+                 slot_hold_ms: int, backend: str = "auto", profile_path: Path | None = None,
+                 calibrate_right: bool = False):
         self.model_path = model_path
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.preview = preview
         self.preferred_backend = backend
+        self.swap_handedness_override = swap_handedness
+        self.calibrate_right_on_start = calibrate_right
+        self.profile_store = VisionProfileStore(profile_path)
+        self.profile_backend = "UNKNOWN"
+        self.role_config_source = "DEFAULT"
+        self.role_lock = threading.Lock()
+        self.hand_calibration = RightHandCalibration()
+
         self.right_stabilizer = GestureStabilizer(
             allowed_gestures=set(ALLOWED_RIGHT_GESTURES),
             hold_ms=hold_ms,
@@ -116,15 +129,12 @@ class GestureVisionEngine:
             min_confidence=confidence,
         )
         self.left_stabilizer = SlotStabilizer(hold_ms=slot_hold_ms, min_confidence=slot_confidence)
-        self.role_resolver = HandRoleResolver(swap_handedness=swap_handedness)
+        self.role_resolver = HandRoleResolver(swap_handedness=bool(swap_handedness))
         self.sequence = 0
         self.session_id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
         self.last_packet = None
 
-        # Telemetry for latency / fps observability. The pending table keeps the
-        # capture + submit timestamps keyed by the MediaPipe timestamp_ms so the
-        # result callback can split frame_age_at_submit / inference / total.
         self.telemetry_lock = threading.Lock()
         self._pending: dict[int, tuple[int, int]] = {}
         self.capture_fps = 0.0
@@ -139,18 +149,14 @@ class GestureVisionEngine:
         self.camera_fps = 0.0
         self.camera_fourcc = ""
 
-        # one-in-flight gate: keeps the MediaPipe async queue at <= 1 frame so
-        # frames can never pile up and produce multi-second stale results.
-        # Note: GestureRecognizer LIVE_STREAM recognize_async returns
-        # immediately and may drop inputs when busy to lower overall latency;
-        # this gate enforces freshness explicitly rather than relying on a
-        # per-frame queue guarantee.
         self._idle = threading.Event()
         self._idle.set()
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+        self.control_socket: socket.socket | None = None
+        self.stop_control = threading.Event()
 
         BaseOptions = mp.tasks.BaseOptions
         GestureRecognizer = mp.tasks.vision.GestureRecognizer
@@ -158,11 +164,6 @@ class GestureVisionEngine:
         RunningMode = mp.tasks.vision.RunningMode
         ClassifierOptions = mp.tasks.components.processors.ClassifierOptions
 
-        # The canned-gesture classifier option field was renamed across
-        # MediaPipe versions: older wheels use the singular
-        # ``canned_gesture_classifier_options`` while newer ones use the
-        # plural ``canned_gestures_classifier_options``. Detect the real field
-        # name so the engine works on either wheel without a source edit.
         import dataclasses as _dataclasses
         _option_fields = {
             f.name for f in _dataclasses.fields(GestureRecognizerOptions)
@@ -207,6 +208,14 @@ class GestureVisionEngine:
                 [float(lm.x), float(lm.y), float(lm.z)]
                 for lm in result.hand_landmarks[index]
             ]
+            world_landmarks: list[list[float]] = []
+            if (getattr(result, "hand_world_landmarks", None)
+                    and index < len(result.hand_world_landmarks)
+                    and result.hand_world_landmarks[index]):
+                world_landmarks = [
+                    [float(lm.x), float(lm.y), float(lm.z)]
+                    for lm in result.hand_world_landmarks[index]
+                ]
 
             raw_gesture = "None"
             gesture_confidence = 0.0
@@ -228,12 +237,106 @@ class GestureVisionEngine:
                 gesture_confidence=gesture_confidence,
                 handedness_label=handedness_label,
                 handedness_confidence=handedness_confidence,
+                world_landmarks=world_landmarks,
             ))
 
         return hands
 
+    def _reset_role_dependent_state_locked(self) -> None:
+        self.role_resolver.reset()
+        self.right_stabilizer.reset()
+        self.left_stabilizer.stable = 0
+        self.left_stabilizer.candidate = 0
+        self.left_stabilizer.candidate_since_ms = 0
+
+    def _set_swap_handedness_locked(self, should_swap: bool, source: str,
+                                    persist: bool) -> None:
+        changed = self.role_resolver.swap_handedness != bool(should_swap)
+        self.role_resolver.set_swap_handedness(bool(should_swap))
+        self.role_config_source = str(source)
+        if changed:
+            self._reset_role_dependent_state_locked()
+        if persist and self.profile_backend:
+            try:
+                self.profile_store.set_swap_handedness(
+                    self.camera_index, self.profile_backend, bool(should_swap), source)
+            except OSError as exc:
+                print(f"Could not persist handedness profile: {exc}")
+
+    def _load_role_profile(self) -> None:
+        with self.role_lock:
+            if self.swap_handedness_override is not None:
+                self._set_swap_handedness_locked(
+                    bool(self.swap_handedness_override), "CLI OVERRIDE", persist=False)
+                return
+
+            stored = self.profile_store.get_swap_handedness(self.camera_index, self.profile_backend)
+            if stored is not None:
+                self._set_swap_handedness_locked(stored, "PROFILE", persist=False)
+            else:
+                self._set_swap_handedness_locked(False, "UNCALIBRATED", persist=False)
+
+    def _role_config_packet_locked(self) -> dict:
+        calibration = self.hand_calibration.snapshot()
+        return {
+            "swap_handedness": bool(self.role_resolver.swap_handedness),
+            "source": self.role_config_source,
+            "calibration_active": bool(calibration.active),
+            "calibration_status": calibration.status,
+            "calibration_samples": int(calibration.sample_count),
+            "calibration_confidence": float(calibration.confidence),
+        }
+
+    def _handle_control_command(self, command: dict) -> None:
+        name = str(command.get("command", "")).strip().lower()
+        now_ms = int(time.monotonic() * 1000)
+        with self.role_lock:
+            if name == "begin_hand_calibration":
+                self.hand_calibration.start(now_ms)
+                self.role_config_source = "CALIBRATING"
+                self._reset_role_dependent_state_locked()
+            elif name == "cancel_hand_calibration":
+                self.hand_calibration.cancel()
+                self.role_config_source = "MANUAL"
+            elif name == "set_swap_handedness":
+                self.hand_calibration.cancel()
+                self._set_swap_handedness_locked(
+                    bool(command.get("value", False)), "MANUAL", persist=True)
+            elif name == "toggle_swap_handedness":
+                self.hand_calibration.cancel()
+                self._set_swap_handedness_locked(
+                    not self.role_resolver.swap_handedness, "MANUAL", persist=True)
+
+    def _control_loop(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.control_socket = sock
+        try:
+            sock.bind((CONTROL_ADDRESS, CONTROL_PORT))
+            sock.settimeout(0.25)
+            print(f"Vision control listening on {CONTROL_ADDRESS}:{CONTROL_PORT}")
+            while not self.stop_control.is_set():
+                try:
+                    payload, _ = sock.recvfrom(4096)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                try:
+                    command = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if isinstance(command, dict):
+                    self._handle_control_command(command)
+        except OSError as exc:
+            print(f"Vision control channel unavailable: {exc}")
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            self.control_socket = None
+
     def _on_result(self, result, _output_image, timestamp_ms: int) -> None:
-        # Previous inference finished; allow the next submission.
         self._idle.set()
         result_ms = int(time.monotonic() * 1000)
         with self.telemetry_lock:
@@ -247,11 +350,7 @@ class GestureVisionEngine:
             telemetry = {
                 "capture_fps": self.capture_fps,
                 "vision_fps": self.vision_fps,
-                # frame_age_at_submit: how old the captured image was when it
-                # entered MediaPipe. High values mean we are feeding stale frames.
                 "frame_age_at_submit_ms": max(0.0, float(submit_ms - capture_ms)),
-                # inference_ms is now pure MediaPipe time (result - submit),
-                # excluding the one-in-flight gate wait.
                 "inference_ms": max(0.0, float(result_ms - submit_ms)),
                 "capture_to_result_ms": max(0.0, float(result_ms - capture_ms)),
                 "backend": self.camera_backend,
@@ -262,7 +361,13 @@ class GestureVisionEngine:
             }
 
         detections = self._extract_hands(result)
-        left_hand, right_hand = self.role_resolver.resolve(detections, timestamp_ms)
+        with self.role_lock:
+            calibration_result = self.hand_calibration.observe(detections, timestamp_ms)
+            if calibration_result is not None and calibration_result.swap_handedness is not None:
+                self._set_swap_handedness_locked(
+                    calibration_result.swap_handedness, "CALIBRATION", persist=True)
+            left_hand, right_hand = self.role_resolver.resolve(detections, timestamp_ms)
+            role_config = self._role_config_packet_locked()
 
         left_packet = empty_left_packet(self.left_stabilizer.stable)
         if left_hand is not None:
@@ -312,6 +417,7 @@ class GestureVisionEngine:
             "seq": self.sequence,
             "timestamp_ms": timestamp_ms,
             "telemetry": telemetry,
+            "role_config": role_config,
             "left": left_packet,
             "right": right_packet,
         }
@@ -355,8 +461,6 @@ class GestureVisionEngine:
             ordered = [backend_map[key]] if key in backend_map else [cv2.CAP_ANY]
         else:
             ordered = [cv2.CAP_ANY]
-            # DirectShow has a smaller driver buffer than Media Foundation on
-            # Windows, so try it first for the lowest capture latency.
             if sys.platform.startswith("win"):
                 ordered = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
 
@@ -371,9 +475,6 @@ class GestureVisionEngine:
     def run(self) -> None:
         capture = self._open_camera()
 
-        # MJPG halves the USB bandwidth vs the default YUYV on external
-        # webcams, leaving headroom for the CPU/GPU inference instead of
-        # saturating the bus with raw frames.
         capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -387,11 +488,22 @@ class GestureVisionEngine:
         self.camera_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.camera_fps = float(capture.get(cv2.CAP_PROP_FPS))
         self.camera_fourcc = self._fourcc_text(capture.get(cv2.CAP_PROP_FOURCC))
+        self.profile_backend = self.camera_backend or self.preferred_backend or "UNKNOWN"
+        self._load_role_profile()
 
-        # Dedicated capture thread that always overwrites the latest frame.
-        # Windows MSMF ignores CAP_PROP_BUFFERSIZE, so without a thread that
-        # keeps reading, the driver buffer fills with stale frames. This loop
-        # drains them so the inference always sees the newest image.
+        if self.calibrate_right_on_start:
+            with self.role_lock:
+                self.hand_calibration.start(int(time.monotonic() * 1000))
+                self.role_config_source = "CALIBRATING"
+
+        self.stop_control.clear()
+        control_thread = threading.Thread(
+            target=self._control_loop,
+            name="GestureRackVisionControl",
+            daemon=True,
+        )
+        control_thread.start()
+
         frame_lock = threading.Lock()
         stop_capture = threading.Event()
         latest_frame = None
@@ -427,10 +539,14 @@ class GestureVisionEngine:
         )
         capture_thread.start()
 
+        with self.role_lock:
+            role_text = "SWAPPED" if self.role_resolver.swap_handedness else "NORMAL"
+            role_source = self.role_config_source
         print("Gesture Vision Engine running - low-latency protocol v2")
         print(f"Session: {self.session_id}")
         print(f"Camera: {self.camera_backend} {self.camera_width}x{self.camera_height} "
               f"{self.camera_fps:.1f} FPS {self.camera_fourcc}")
+        print(f"Hand roles: {role_text} ({role_source})")
         print("Capture keeps only the newest frame; inference is one-in-flight")
         print("Tracking physical left and right hands independently")
         print("Left hand classifies Slot 1-5 only; Slot 6-9 remain mouse-selectable")
@@ -446,14 +562,6 @@ class GestureVisionEngine:
 
         try:
             while True:
-                # one-in-flight gate (wait-first): block until the previous
-                # inference has finished BEFORE snapshotting the latest frame.
-                # The previous order (snapshot -> wait -> submit) let the frame
-                # age by up to one extra inference period while we waited idle,
-                # so the submitted image was already stale. Waiting first means
-                # we always grab the newest frame right at submit time.
-                # Event.wait() returns False on timeout; in that case the model
-                # is stuck, so skip this iteration instead of queuing more work.
                 if not self._idle.wait(timeout=2.0):
                     continue
                 self._idle.clear()
@@ -463,8 +571,6 @@ class GestureVisionEngine:
                     sequence = latest_sequence
                     capture_ms = latest_capture_ms
                 if frame is None or sequence == last_consumed_sequence:
-                    # No fresh frame yet; re-arm the gate so we wait for a real
-                    # result callback next time instead of busy-spinning.
                     self._idle.set()
                     time.sleep(0.001)
                     continue
@@ -474,11 +580,6 @@ class GestureVisionEngine:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 rgb = np.ascontiguousarray(rgb)
 
-                # timestamp_ms is the MediaPipe per-frame monotonically-
-                # increasing id (used to match result callbacks to submissions).
-                # It MUST be generated after the idle wait so that inference_ms
-                # = result_ms - submit_ms measures pure MediaPipe time, not the
-                # gate wait. capture_to_result stays the true end-to-end figure.
                 submit_ms = int(time.monotonic() * 1000)
                 timestamp_ms = submit_ms
                 if timestamp_ms <= last_submit_ms:
@@ -494,8 +595,6 @@ class GestureVisionEngine:
                 try:
                     self.recognizer.recognize_async(mp_image, timestamp_ms)
                 except Exception:
-                    # Re-arm the gate so the loop is not deadlocked if a
-                    # submission fails without producing a result callback.
                     self._idle.set()
 
                 if self.preview:
@@ -506,6 +605,7 @@ class GestureVisionEngine:
                         self._draw_landmarks(frame, packet["left"], (255, 190, 80), "PHYSICAL LEFT")
                         self._draw_landmarks(frame, packet["right"], (80, 220, 140), "PHYSICAL RIGHT")
                         telemetry = packet.get("telemetry", {})
+                        role = packet.get("role_config", {})
                         cv2.putText(frame,
                                     f"CAM {telemetry.get('capture_fps', 0.0):.1f}  "
                                     f"VISION {telemetry.get('vision_fps', 0.0):.1f}  "
@@ -513,6 +613,11 @@ class GestureVisionEngine:
                                     f"LAT {telemetry.get('capture_to_result_ms', 0.0):.0f}ms",
                                     (18, 34), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.60, (255, 255, 255), 2, cv2.LINE_AA)
+                        cv2.putText(frame,
+                                    f"ROLES {'SWAP' if role.get('swap_handedness') else 'NORMAL'}  "
+                                    f"{role.get('calibration_status', '')}",
+                                    (18, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.52, (255, 255, 255), 1, cv2.LINE_AA)
 
                     cv2.imshow("Gesture Vision Engine v2", frame)
                     if cv2.waitKey(1) & 0xFF == 27:
@@ -521,6 +626,13 @@ class GestureVisionEngine:
             stop_capture.set()
             capture.release()
             capture_thread.join(timeout=2.0)
+            self.stop_control.set()
+            if self.control_socket is not None:
+                try:
+                    self.control_socket.close()
+                except OSError:
+                    pass
+            control_thread.join(timeout=1.0)
             if self.preview:
                 cv2.destroyAllWindows()
             self.recognizer.close()
@@ -545,10 +657,30 @@ def main() -> None:
         choices=["auto", "any", "dshow", "msmf"],
         help="Camera backend: auto (default), any, dshow (DirectShow), msmf (Media Foundation).",
     )
-    parser.add_argument(
+    handedness = parser.add_mutually_exclusive_group()
+    handedness.add_argument(
         "--swap-handedness",
+        dest="swap_handedness",
         action="store_true",
-        help="Swap MediaPipe Left/Right labels if the mirrored camera pipeline reports physical roles reversed.",
+        help="Force swapped MediaPipe Left/Right labels for this run.",
+    )
+    handedness.add_argument(
+        "--no-swap-handedness",
+        dest="swap_handedness",
+        action="store_false",
+        help="Force normal MediaPipe Left/Right labels for this run.",
+    )
+    parser.set_defaults(swap_handedness=None)
+    parser.add_argument(
+        "--calibrate-right",
+        action="store_true",
+        help="Start physical-right-hand calibration immediately after opening the camera.",
+    )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        default=None,
+        help="Optional vision profile path (default is the per-user GestureRack config directory).",
     )
     parser.add_argument(
         "--model",
@@ -571,6 +703,8 @@ def main() -> None:
         slot_confidence=args.slot_confidence,
         slot_hold_ms=args.slot_hold_ms,
         backend=args.backend,
+        profile_path=args.profile,
+        calibrate_right=args.calibrate_right,
     )
     engine.run()
 
