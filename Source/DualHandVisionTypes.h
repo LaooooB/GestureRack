@@ -27,6 +27,13 @@ struct HandSnapshot
     // Height is the dedicated One Euro filtered continuous-control signal.
     float height = 0.5f;
 
+    bool shadowAvailable = false;
+    ControlGesture shadowGesture = ControlGesture::unknown;
+    float shadowConfidence = 0.0f;
+    float shadowMargin = 0.0f;
+    float shadowInferenceMs = 0.0f;
+    bool shadowAgrees = false;
+
     std::array<HandPoint, 21> landmarks {};
 };
 
@@ -44,6 +51,13 @@ struct DualHandVisionSnapshot
     float frameAgeAtSubmitMs = 0.0f;
     float inferenceMs = 0.0f;
     juce::String cameraBackend;
+
+    bool shadowModelLoaded = false;
+    int shadowSamples = 0;
+    float shadowAgreementRate = 0.0f;
+    float shadowDisagreementRate = 0.0f;
+    float shadowMeanInferenceMs = 0.0f;
+    float shadowP95InferenceMs = 0.0f;
 
     bool swapHandedness = false;
     bool handCalibrationActive = false;
