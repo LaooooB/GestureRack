@@ -129,12 +129,25 @@ void VisionReceiver::run()
         if (ready <= 0)
             continue;
 
-        const auto bytes = socket.read (buffer.data(), static_cast<int> (buffer.size() - 1), false);
-        if (bytes <= 0)
-            continue;
+        // Drain the OS socket buffer in a tight loop, keeping only the newest
+        // datagram. Without this, if packets arrive faster than the timer
+        // polls, stale frames pile up in the kernel buffer and the editor
+        // renders hand landmarks that are seconds behind reality.
+        int bytes = 0;
+        int lastBytes = 0;
+        do
+        {
+            bytes = socket.read (buffer.data(), static_cast<int> (buffer.size() - 1), false);
+            if (bytes <= 0)
+                break;
+            lastBytes = bytes;
+        } while (! threadShouldExit());
 
-        buffer[static_cast<size_t> (bytes)] = '\0';
-        parsePacket (juce::String::fromUTF8 (buffer.data(), bytes));
+        if (lastBytes > 0)
+        {
+            buffer[static_cast<size_t> (lastBytes)] = '\0';
+            parsePacket (juce::String::fromUTF8 (buffer.data(), lastBytes));
+        }
     }
 }
 
@@ -161,6 +174,16 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
     }
     else
     {
+        if (const auto telemetryVar = object->getProperty ("telemetry"); telemetryVar.isObject())
+        {
+            if (auto* t = telemetryVar.getDynamicObject())
+            {
+                next.captureFps = static_cast<float> (t->getProperty ("capture_fps"));
+                next.visionFps = static_cast<float> (t->getProperty ("vision_fps"));
+                next.captureToResultMs = static_cast<float> (t->getProperty ("capture_to_result_ms"));
+                next.cameraBackend = t->getProperty ("backend").toString();
+            }
+        }
         if (const auto leftVar = object->getProperty ("left"); leftVar.isObject())
             parseHand (leftVar.getDynamicObject(), next.left);
         if (const auto rightVar = object->getProperty ("right"); rightVar.isObject())

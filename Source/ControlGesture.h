@@ -31,6 +31,21 @@ inline juce::String controlGestureToString (ControlGesture gesture)
     }
 }
 
+inline juce::String controlGestureToEmoji (ControlGesture gesture)
+{
+    switch (gesture)
+    {
+        case ControlGesture::openPalm:   return juce::CharPointer_UTF8 ("\xE2\x9C\x8B");            // ✋
+        case ControlGesture::closedFist: return juce::CharPointer_UTF8 ("\xE2\x9C\x8A");            // ✊
+        case ControlGesture::victory:    return juce::CharPointer_UTF8 ("\xE2\x9C\x8C\xEF\xB8\x8F"); // ✌️
+        case ControlGesture::thumbUp:    return juce::CharPointer_UTF8 ("\xF0\x9F\x91\x8D");        // 👍
+        case ControlGesture::thumbDown:  return juce::CharPointer_UTF8 ("\xF0\x9F\x91\x8E");        // 👎
+        case ControlGesture::pointRight: return juce::CharPointer_UTF8 ("\xF0\x9F\x91\x89");        // 👉
+        case ControlGesture::pointLeft:  return juce::CharPointer_UTF8 ("\xF0\x9F\x91\x88");        // 👈
+        default:                         return juce::CharPointer_UTF8 ("?");
+    }
+}
+
 inline ControlGesture controlGestureFromString (const juce::String& text)
 {
     if (text.equalsIgnoreCase ("Open Palm") || text.equalsIgnoreCase ("Open_Palm"))
