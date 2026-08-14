@@ -21,11 +21,17 @@ CANNED_TO_CONTROL = {
     "Thumb_Down": "Thumb_Down",
 }
 
+# Classifier ambiguity gate. Temporal/per-class activation thresholds live in
+# gesture_stabilizer.py.
+DEFAULT_TOP2_MARGIN = 0.055
+
 
 @dataclass(frozen=True)
 class RightGestureClassification:
     gesture: str = "None"
     confidence: float = 0.0
+    runner_up_confidence: float = 0.0
+    margin: float = 0.0
 
 
 def _clamp01(value: float) -> float:
@@ -60,12 +66,12 @@ def _finger_extension_score(landmarks: list[list[float]], mcp: int, pip: int, di
     p_tip = _point(landmarks, tip)
 
     straight_score = _clamp01(((_angle_degrees(p_mcp, p_pip, p_dip)
-                                + _angle_degrees(p_pip, p_dip, p_tip)) * 0.5 - 112.0) / 55.0)
+                                + _angle_degrees(p_pip, p_dip, p_tip)) * 0.5 - 108.0) / 58.0)
     reach_score = _clamp01((_distance(wrist, p_tip)
-                            / max(1.0e-5, _distance(wrist, p_pip)) - 1.00) / 0.38)
+                            / max(1.0e-5, _distance(wrist, p_pip)) - 0.98) / 0.40)
     length_score = _clamp01((_distance(p_mcp, p_tip)
-                             / max(1.0e-5, _distance(p_mcp, p_pip)) - 1.35) / 0.95)
-    return 0.52 * straight_score + 0.30 * reach_score + 0.18 * length_score
+                             / max(1.0e-5, _distance(p_mcp, p_pip)) - 1.30) / 1.00)
+    return 0.50 * straight_score + 0.31 * reach_score + 0.19 * length_score
 
 
 def _thumb_extension_score(landmarks: list[list[float]]) -> float:
@@ -83,11 +89,11 @@ def _thumb_extension_score(landmarks: list[list[float]]) -> float:
     palm_width = max(1.0e-5, _distance(index_mcp, pinky_mcp))
 
     straight_score = _clamp01(((_angle_degrees(thumb_cmc, thumb_mcp, thumb_ip)
-                                + _angle_degrees(thumb_mcp, thumb_ip, thumb_tip)) * 0.5 - 103.0) / 58.0)
-    radial_score = _clamp01((_distance(thumb_tip, palm_center) / palm_width - 0.55) / 0.55)
+                                + _angle_degrees(thumb_mcp, thumb_ip, thumb_tip)) * 0.5 - 100.0) / 62.0)
+    radial_score = _clamp01((_distance(thumb_tip, palm_center) / palm_width - 0.48) / 0.62)
     reach_score = _clamp01((_distance(thumb_tip, palm_center)
-                            / max(1.0e-5, _distance(thumb_ip, palm_center)) - 1.01) / 0.38)
-    return 0.42 * straight_score + 0.38 * radial_score + 0.20 * reach_score
+                            / max(1.0e-5, _distance(thumb_ip, palm_center)) - 0.98) / 0.42)
+    return 0.40 * straight_score + 0.39 * radial_score + 0.21 * reach_score
 
 
 def _pattern_confidence(scores: dict[str, float], expected: dict[str, bool]) -> float:
@@ -96,70 +102,85 @@ def _pattern_confidence(scores: dict[str, float], expected: dict[str, bool]) -> 
     return _clamp01(sum(confidence) / len(confidence))
 
 
-def _pointing_candidate(landmarks: list[list[float]], scores: dict[str, float]) -> RightGestureClassification:
-    shape = _pattern_confidence(scores, {
-        "index": True,
-        "middle": False,
-        "ring": False,
-        "pinky": False,
+def _palm_width(landmarks: list[list[float]]) -> float:
+    return max(1.0e-5, _distance(_point(landmarks, 5), _point(landmarks, 17)))
+
+
+def _shape_scores(scores: dict[str, float]) -> dict[str, float]:
+    # Open Palm deliberately does NOT require a fully extended thumb. Natural
+    # palms often have a relaxed/adducted thumb; four non-thumb fingers are the
+    # primary shape evidence and thumb extension is only a small bonus.
+    four = [scores["index"], scores["middle"], scores["ring"], scores["pinky"]]
+    open_palm = _clamp01(0.72 * (sum(four) / 4.0)
+                         + 0.22 * min(four)
+                         + 0.06 * scores["thumb"])
+
+    fist_base = _pattern_confidence(scores, {
+        "index": False, "middle": False, "ring": False, "pinky": False,
     })
-    if shape < 0.72:
-        return RightGestureClassification()
-
-    index_mcp = _point(landmarks, 5)
-    index_tip = _point(landmarks, 8)
-    dx = index_tip[0] - index_mcp[0]
-    dy = index_tip[1] - index_mcp[1]
-    magnitude = math.hypot(dx, dy)
-    if magnitude < 0.07:
-        return RightGestureClassification()
-
-    horizontal = abs(dx) / max(1.0e-6, magnitude)
-    if horizontal < 0.78 or abs(dx) < 0.08:
-        return RightGestureClassification()
-
-    direction_confidence = (_clamp01((horizontal - 0.70) / 0.28)
-                            * _clamp01((abs(dx) - 0.06) / 0.20))
-    confidence = _clamp01(0.58 * shape + 0.42 * direction_confidence)
-    return RightGestureClassification("Point_Right" if dx > 0.0 else "Point_Left", confidence)
-
-
-def _thumb_direction_candidate(landmarks: list[list[float]], scores: dict[str, float]) -> RightGestureClassification:
-    shape = _pattern_confidence(scores, {
-        "thumb": True,
-        "index": False,
-        "middle": False,
-        "ring": False,
-        "pinky": False,
+    # A thumb-only pose also has four folded fingers. Penalise Fist when the
+    # thumb is clearly extended so Thumb Up/Down does not lose to a false fist.
+    fist = _clamp01(fist_base * (1.0 - 0.55 * scores["thumb"]))
+    victory = _pattern_confidence(scores, {
+        "index": True, "middle": True, "ring": False, "pinky": False,
     })
-    if shape < 0.66:
-        return RightGestureClassification()
+    thumb_only = _pattern_confidence(scores, {
+        "thumb": True, "index": False, "middle": False, "ring": False, "pinky": False,
+    })
+    # The thumb is intentionally omitted from PointOnly. Users naturally leave
+    # it in several positions while pointing; requiring it folded caused misses.
+    point_only = _pattern_confidence(scores, {
+        "index": True, "middle": False, "ring": False, "pinky": False,
+    })
 
-    thumb_mcp = _point(landmarks, 2)
-    thumb_tip = _point(landmarks, 4)
-    dx = thumb_tip[0] - thumb_mcp[0]
-    dy = thumb_tip[1] - thumb_mcp[1]
+    return {
+        "Open_Palm": open_palm,
+        "Closed_Fist": fist,
+        "Victory": victory,
+        "ThumbOnly": thumb_only,
+        "PointOnly": point_only,
+    }
+
+
+def _direction_confidence(dx: float, dy: float, primary: str, palm_width: float) -> float:
     magnitude = math.hypot(dx, dy)
-    if magnitude < 0.06:
-        return RightGestureClassification()
+    if magnitude < 1.0e-6:
+        return 0.0
+    if primary == "horizontal":
+        axis = abs(dx) / magnitude
+        displacement = abs(dx) / palm_width
+    else:
+        axis = abs(dy) / magnitude
+        displacement = abs(dy) / palm_width
 
-    vertical = abs(dy) / max(1.0e-6, magnitude)
-    if vertical < 0.68 or abs(dy) < 0.06:
-        return RightGestureClassification()
+    # The old 0.78/0.68 hard axis ratios rejected normal wrist rotation. The
+    # shape head already proves this is a point/thumb pose; this head only decides
+    # direction, so the directional gate can be softer.
+    axis_score = _clamp01((axis - 0.50) / 0.40)
+    displacement_score = _clamp01((displacement - 0.32) / 0.95)
+    return _clamp01(0.66 * axis_score + 0.34 * displacement_score)
 
-    direction_confidence = (_clamp01((vertical - 0.60) / 0.35)
-                            * _clamp01((abs(dy) - 0.05) / 0.20))
-    confidence = _clamp01(0.58 * shape + 0.42 * direction_confidence)
-    return RightGestureClassification("Thumb_Up" if dy < 0.0 else "Thumb_Down", confidence)
+
+def _canned_boost(gesture: str, geometry: float,
+                  canned_gesture: str, canned_confidence: float) -> float:
+    canonical = CANNED_TO_CONTROL.get(canned_gesture, "None")
+    if canonical != gesture:
+        return geometry
+    canned = _clamp01(canned_confidence)
+    # Canned recognition is a strong independent signal for these poses, but
+    # geometry still contributes so an occasional wrong canned result does not
+    # automatically own the output.
+    fused = 0.74 * canned + 0.26 * geometry
+    return _clamp01(max(geometry, fused))
 
 
 def classify_right_gesture(landmarks: list[list[float]], canned_gesture: str = "None",
                            canned_confidence: float = 0.0) -> RightGestureClassification:
     """Classify the seven physical-right control gestures.
 
-    Point Right/Left intentionally share one index-pointing pose classifier and are
-    split only by the index MCP -> tip direction. Because the camera frame is mirrored
-    before MediaPipe runs, positive image X corresponds to the preview/user's right.
+    Shape and direction are separate heads. Open/Fist/Victory are shape classes;
+    ThumbOnly and PointOnly are shape classes whose final control meaning is
+    decided in image coordinates (Up/Down or Left/Right).
     """
     if len(landmarks) < 21:
         return RightGestureClassification()
@@ -171,35 +192,57 @@ def classify_right_gesture(landmarks: list[list[float]], canned_gesture: str = "
         "pinky": _finger_extension_score(landmarks, 17, 18, 19, 20),
         "thumb": _thumb_extension_score(landmarks),
     }
+    shapes = _shape_scores(scores)
 
-    point = _pointing_candidate(landmarks, scores)
-    if point.gesture != "None" and point.confidence >= 0.72:
-        return point
-
-    geometry = {
-        "Open_Palm": _pattern_confidence(scores, {
-            "thumb": True, "index": True, "middle": True, "ring": True, "pinky": True,
-        }),
-        "Closed_Fist": _pattern_confidence(scores, {
-            "index": False, "middle": False, "ring": False, "pinky": False,
-        }),
-        "Victory": _pattern_confidence(scores, {
-            "index": True, "middle": True, "ring": False, "pinky": False,
-        }),
+    candidates: dict[str, float] = {
+        "Open_Palm": _canned_boost("Open_Palm", shapes["Open_Palm"],
+                                     canned_gesture, canned_confidence),
+        "Closed_Fist": _canned_boost("Closed_Fist", shapes["Closed_Fist"],
+                                       canned_gesture, canned_confidence),
+        "Victory": _canned_boost("Victory", shapes["Victory"],
+                                   canned_gesture, canned_confidence),
     }
 
-    thumb = _thumb_direction_candidate(landmarks, scores)
-    if thumb.gesture != "None":
-        geometry[thumb.gesture] = thumb.confidence
+    palm_width = _palm_width(landmarks)
 
-    canonical = CANNED_TO_CONTROL.get(canned_gesture, "None")
-    if canonical != "None":
-        geometry_confidence = geometry.get(canonical, 0.0)
-        confidence = _clamp01(0.72 * _clamp01(canned_confidence) + 0.28 * geometry_confidence)
-        if confidence >= 0.45:
-            return RightGestureClassification(canonical, confidence)
+    # Thumb direction head. Do not require an almost perfectly vertical thumb;
+    # users rotate the wrist naturally. Shape confidence carries most weight.
+    thumb_mcp = _point(landmarks, 2)
+    thumb_tip = _point(landmarks, 4)
+    thumb_dx = thumb_tip[0] - thumb_mcp[0]
+    thumb_dy = thumb_tip[1] - thumb_mcp[1]
+    thumb_direction = _direction_confidence(thumb_dx, thumb_dy, "vertical", palm_width)
+    thumb_shape = shapes["ThumbOnly"]
+    if thumb_shape >= 0.50 and thumb_direction >= 0.20:
+        thumb_score = _clamp01(0.74 * thumb_shape + 0.26 * thumb_direction)
+        thumb_name = "Thumb_Up" if thumb_dy < 0.0 else "Thumb_Down"
+        candidates[thumb_name] = _canned_boost(
+            thumb_name, thumb_score, canned_gesture, canned_confidence)
 
-    gesture, confidence = max(geometry.items(), key=lambda item: item[1])
-    if confidence < 0.78:
+    # Point direction is independent of MediaPipe Pointing_Up. Horizontal point
+    # must not first be misclassified as Up in order to become Left/Right.
+    index_mcp = _point(landmarks, 5)
+    index_tip = _point(landmarks, 8)
+    point_dx = index_tip[0] - index_mcp[0]
+    point_dy = index_tip[1] - index_mcp[1]
+    point_direction = _direction_confidence(point_dx, point_dy, "horizontal", palm_width)
+    point_shape = shapes["PointOnly"]
+    if point_shape >= 0.54 and point_direction >= 0.24:
+        point_score = _clamp01(0.72 * point_shape + 0.28 * point_direction)
+        candidates["Point_Right" if point_dx > 0.0 else "Point_Left"] = point_score
+
+    ranked = sorted(candidates.items(), key=lambda item: item[1], reverse=True)
+    if not ranked:
         return RightGestureClassification()
-    return RightGestureClassification(gesture, _clamp01(confidence))
+
+    gesture, confidence = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
+    margin = confidence - runner_up
+
+    # Ambiguous poses are safer as None. A very strong winner can pass even when
+    # related score heads are numerically close.
+    if margin < DEFAULT_TOP2_MARGIN and confidence < 0.90:
+        return RightGestureClassification("None", confidence, runner_up, margin)
+
+    return RightGestureClassification(gesture, _clamp01(confidence),
+                                      _clamp01(runner_up), _clamp01(margin))
