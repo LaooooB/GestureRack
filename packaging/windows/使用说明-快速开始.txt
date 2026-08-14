@@ -1,0 +1,34 @@
+Gesture Rack — Windows 快速开始
+
+这个包不要求安装 Python。
+
+1. 安装 VST3
+   把 VST3 文件夹里的 “Gesture Rack.vst3” 整个复制到：
+   C:\Program Files\Common Files\VST3\
+
+   如果 Windows 要求管理员权限，请确认后继续。
+
+2. 启动手势识别
+   双击：
+   GestureVisionEngine.exe
+
+   第一次启动摄像头时请允许摄像头权限。保持这个程序运行。
+
+3. 在 DAW 里加载 Gesture Rack
+   重新扫描 VST3，然后插入 “Gesture Rack”。
+   在 Rack 里把你的效果器载入 Slot。
+
+建议首次使用：
+- 点击 CALIBRATE RIGHT，根据界面提示只举起你的物理右手完成左右手校准。
+- 左手 1–5 选择对应 Rack Slot；6–9 当前仍可用鼠标选择。
+- 右手手势用于你在 Rack 中配置的 ENABLE / BYPASS / 参数映射。
+- 参数连续控制使用右手高度信号；手向上移动提高参数，向下移动降低参数，具体范围由映射设置决定。
+
+摄像头或识别异常：
+- 关闭其他正在占用摄像头的软件后重新启动 GestureVisionEngine.exe。
+- 确认 Windows 设置里已允许桌面应用访问摄像头。
+- 如果左右手角色反了，重新点 CALIBRATE RIGHT；也可以使用 SWAP L/R 手动切换。
+
+开发/诊断说明：
+- 正常发行包默认不启用 tiny learned classifier 的 shadow inference，因此不会额外增加这部分模型开销。
+- GestureVisionEngine.exe 关闭后，Rack 会显示 VISION OFFLINE，但音频插件本身仍可加载。
