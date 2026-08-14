@@ -57,6 +57,13 @@ void parseLegacyV1 (juce::DynamicObject& object, DualHandVisionSnapshot& next)
     next.right.confidence = static_cast<float> (object.getProperty ("confidence"));
     parseLandmarks (object.getProperty ("landmarks"), next.right.landmarks);
 }
+
+juce::var makeCommand (const juce::String& name)
+{
+    auto* object = new juce::DynamicObject();
+    object->setProperty ("command", name);
+    return juce::var (object);
+}
 }
 
 VisionReceiver::VisionReceiver()
@@ -119,6 +126,38 @@ bool VisionReceiver::isConnected() const
     return current.receivedAtMs > 0 && (now - current.receivedAtMs) < 1500;
 }
 
+bool VisionReceiver::sendControlCommand (const juce::var& command)
+{
+    const auto payload = juce::JSON::toString (command, true);
+    const auto bytes = payload.getNumBytesAsUTF8();
+    if (bytes <= 0)
+        return false;
+    return commandSocket.write (controlAddress, controlPort, payload.toRawUTF8(), bytes) == bytes;
+}
+
+bool VisionReceiver::beginHandCalibration()
+{
+    return sendControlCommand (makeCommand ("begin_hand_calibration"));
+}
+
+bool VisionReceiver::cancelHandCalibration()
+{
+    return sendControlCommand (makeCommand ("cancel_hand_calibration"));
+}
+
+bool VisionReceiver::setSwapHandedness (bool shouldSwap)
+{
+    auto command = makeCommand ("set_swap_handedness");
+    if (auto* object = command.getDynamicObject())
+        object->setProperty ("value", shouldSwap);
+    return sendControlCommand (command);
+}
+
+bool VisionReceiver::toggleSwapHandedness()
+{
+    return sendControlCommand (makeCommand ("toggle_swap_handedness"));
+}
+
 void VisionReceiver::run()
 {
     std::array<char, 16384> buffer {};
@@ -129,10 +168,6 @@ void VisionReceiver::run()
         if (ready <= 0)
             continue;
 
-        // Drain the OS socket buffer in a tight loop, keeping only the newest
-        // datagram. Without this, if packets arrive faster than the timer
-        // polls, stale frames pile up in the kernel buffer and the editor
-        // renders hand landmarks that are seconds behind reality.
         int bytes = 0;
         int lastBytes = 0;
         do
@@ -187,6 +222,20 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
                 next.cameraBackend = t->getProperty ("backend").toString();
             }
         }
+
+        if (const auto roleVar = object->getProperty ("role_config"); roleVar.isObject())
+        {
+            if (auto* role = roleVar.getDynamicObject())
+            {
+                next.swapHandedness = static_cast<bool> (role->getProperty ("swap_handedness"));
+                next.handCalibrationActive = static_cast<bool> (role->getProperty ("calibration_active"));
+                next.handCalibrationSamples = static_cast<int> (role->getProperty ("calibration_samples"));
+                next.handCalibrationConfidence = static_cast<float> (role->getProperty ("calibration_confidence"));
+                next.handCalibrationStatus = role->getProperty ("calibration_status").toString();
+                next.handRoleSource = role->getProperty ("source").toString();
+            }
+        }
+
         if (const auto leftVar = object->getProperty ("left"); leftVar.isObject())
             parseHand (leftVar.getDynamicObject(), next.left);
         if (const auto rightVar = object->getProperty ("right"); rightVar.isObject())
@@ -194,6 +243,11 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
     }
 
     const juce::SpinLock::ScopedLockType lock (snapshotLock);
+    const auto sameSession = snapshot.sessionId.isNotEmpty()
+                          && next.sessionId.isNotEmpty()
+                          && snapshot.sessionId == next.sessionId;
+    if (snapshot.receivedAtMs > 0 && sameSession && next.sequence <= snapshot.sequence)
+        return;
     snapshot = next;
 }
 }
