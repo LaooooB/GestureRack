@@ -40,13 +40,11 @@ public:
         content.removeFromBottom (58);
         auto panel = content.removeFromLeft (juce::jlimit (300, 420, content.getWidth() * 32 / 100));
 
-        // card background
         g.setColour (juce::Colour::fromRGB (247, 248, 250));
         g.fillRoundedRectangle (panel.toFloat(), 14.0f);
         g.setColour (juce::Colour::fromRGB (205, 210, 218));
         g.drawRoundedRectangle (panel.toFloat(), 14.0f, 1.0f);
 
-        // header (minimal)
         g.setColour (juce::Colour::fromRGB (45, 48, 56));
         g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
         g.drawText ("GESTURES", panel.getX() + 16, panel.getY() + 12,
@@ -80,7 +78,7 @@ public:
             else if (isHover)
                 g.setColour (juce::Colour::fromRGB (235, 238, 242));
             else
-                g.setColour (juce::Colour::fromRGB (255, 255, 255));
+                g.setColour (juce::Colour (255, 255, 255));
             g.fillRoundedRectangle (chip.toFloat(), 8.0f);
             g.setColour (isLive ? juce::Colour::fromRGB (235, 165, 40)
                                 : juce::Colour::fromRGB (205, 210, 218));
@@ -105,7 +103,7 @@ public:
             if (hot)
                 g.setColour (accent.withAlpha (0.18f));
             else
-                g.setColour (juce::Colour::fromRGB (255, 255, 255));
+                g.setColour (juce::Colour (255, 255, 255));
             g.fillRoundedRectangle (rect.toFloat(), 8.0f);
             g.setColour (hot ? accent : juce::Colour::fromRGB (205, 210, 218));
             g.drawRoundedRectangle (rect.toFloat(), 8.0f, 1.0f);
@@ -178,6 +176,8 @@ private:
     juce::TextButton removeButton { "REMOVE" };
     juce::TextButton bypassButton { "ACTIVE" };
     juce::TextButton enableButton { "GESTURE ON" };
+    juce::TextButton calibrateHandsButton { "CALIBRATE RIGHT" };
+    juce::TextButton swapHandsButton { "SWAP L/R" };
 
     gr::ParameterInspector parameterInspector;
     std::unique_ptr<juce::FileChooser> fileChooser;
