@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
 #include "DualHandVisionTypes.h"
 
 namespace gr
@@ -32,6 +33,7 @@ private:
 
     mutable juce::SpinLock snapshotLock;
     DualHandVisionSnapshot snapshot;
+    std::atomic<int64_t> lastPacketReceivedAtMs { 0 };
     juce::DatagramSocket socket { false };
     juce::DatagramSocket commandSocket { false };
 };
