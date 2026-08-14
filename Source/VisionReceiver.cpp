@@ -49,6 +49,20 @@ void parseHand (juce::DynamicObject* object, HandSnapshot& hand)
         ? juce::jlimit (0.0f, 1.0f, static_cast<float> (object->getProperty ("height")))
         : juce::jlimit (0.0f, 1.0f, static_cast<float> (rawHeightVar));
     hand.height = juce::jlimit (0.0f, 1.0f, static_cast<float> (object->getProperty ("height")));
+
+    if (const auto shadowVar = object->getProperty ("shadow"); shadowVar.isObject())
+    {
+        if (auto* shadow = shadowVar.getDynamicObject())
+        {
+            hand.shadowAvailable = static_cast<bool> (shadow->getProperty ("available"));
+            hand.shadowGesture = controlGestureFromString (shadow->getProperty ("gesture").toString());
+            hand.shadowConfidence = static_cast<float> (shadow->getProperty ("confidence"));
+            hand.shadowMargin = static_cast<float> (shadow->getProperty ("margin"));
+            hand.shadowInferenceMs = static_cast<float> (shadow->getProperty ("inference_ms"));
+            hand.shadowAgrees = static_cast<bool> (shadow->getProperty ("agrees"));
+        }
+    }
+
     parseLandmarks (object->getProperty ("landmarks"), hand.landmarks);
 }
 
@@ -224,6 +238,12 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
                 next.frameAgeAtSubmitMs = static_cast<float> (t->getProperty ("frame_age_at_submit_ms"));
                 next.inferenceMs = static_cast<float> (t->getProperty ("inference_ms"));
                 next.cameraBackend = t->getProperty ("backend").toString();
+                next.shadowModelLoaded = static_cast<bool> (t->getProperty ("shadow_model_loaded"));
+                next.shadowSamples = static_cast<int> (t->getProperty ("shadow_samples"));
+                next.shadowAgreementRate = static_cast<float> (t->getProperty ("shadow_agreement_rate"));
+                next.shadowDisagreementRate = static_cast<float> (t->getProperty ("shadow_disagreement_rate"));
+                next.shadowMeanInferenceMs = static_cast<float> (t->getProperty ("shadow_mean_inference_ms"));
+                next.shadowP95InferenceMs = static_cast<float> (t->getProperty ("shadow_p95_inference_ms"));
             }
         }
 
