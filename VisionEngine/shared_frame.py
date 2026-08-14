@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from multiprocessing import shared_memory
 import struct
-from typing import Optional
 
 
 SHM_NAME = "GestureRackVisionFrameV1"
@@ -16,7 +15,6 @@ HEADER_FORMAT = "<IIQIIIIQII"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 MAX_PAYLOAD_BYTES = MAX_WIDTH * MAX_HEIGHT * CHANNELS
 SHM_SIZE = HEADER_SIZE + MAX_PAYLOAD_BYTES
-_SEQUENCE_OFFSET = 8
 
 
 @dataclass(frozen=True)
@@ -55,35 +53,31 @@ def unpack_header(buffer) -> FrameHeader:
 class SharedFrameWriter:
     """Publish the exact MediaPipe callback image through named shared memory.
 
-    A simple sequence lock is used: odd sequence means write in progress, even
-    means complete. Readers copy the payload only when the sequence is even and
-    unchanged before/after the copy, so the VST3 never renders a torn frame.
+    A sequence lock is used: odd sequence means write in progress, even means
+    complete. On Windows the VST3 may keep the mapping alive while the sidecar
+    restarts, so a new writer attaches to an existing correctly-sized mapping
+    rather than trying to destroy it.
     """
 
     def __init__(self, name: str = SHM_NAME):
         self.name = name
-        self.shm = self._create_or_replace(name)
+        self.shm = self._create_or_attach(name)
         self.sequence = 0
         self._write_header(0, 0, 0, 0, 0, 0)
 
     @staticmethod
-    def _create_or_replace(name: str) -> shared_memory.SharedMemory:
+    def _create_or_attach(name: str) -> shared_memory.SharedMemory:
         try:
             return shared_memory.SharedMemory(name=name, create=True, size=SHM_SIZE)
         except FileExistsError:
-            stale: Optional[shared_memory.SharedMemory] = None
+            existing = shared_memory.SharedMemory(name=name, create=False)
+            if existing.size >= SHM_SIZE:
+                return existing
+            existing.close()
             try:
-                stale = shared_memory.SharedMemory(name=name, create=False)
-                stale.close()
-                stale.unlink()
+                existing.unlink()
             except FileNotFoundError:
                 pass
-            finally:
-                if stale is not None:
-                    try:
-                        stale.close()
-                    except Exception:
-                        pass
             return shared_memory.SharedMemory(name=name, create=True, size=SHM_SIZE)
 
     def _write_header(self, sequence: int, width: int, height: int, stride: int,
@@ -115,6 +109,8 @@ class SharedFrameWriter:
             return False
 
         view = memoryview(rgb)
+        if view.ndim != 1 or view.format != "B":
+            view = view.cast("B")
         if view.nbytes < payload_bytes:
             return False
 
