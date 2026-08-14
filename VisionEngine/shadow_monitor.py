@@ -131,8 +131,13 @@ def main() -> None:
                 if not isinstance(right, dict) or not right.get("present", False):
                     continue
                 landmarks = right.get("landmarks", [])
+                world_landmarks = right.get("world_landmarks", [])
                 heuristic = str(right.get("raw_gesture", "None"))
-                observation = evaluator.evaluate(landmarks, heuristic)
+                observation = evaluator.evaluate(
+                    landmarks,
+                    heuristic,
+                    world_landmarks if world_landmarks else None,
+                )
                 if not observation.available:
                     continue
 
@@ -153,6 +158,7 @@ def main() -> None:
                     },
                     "agrees": observation.agrees,
                     "stable_gesture": str(right.get("stable_gesture", "None")),
+                    "used_world_landmarks": bool(world_landmarks),
                     "role_source": (
                         str(packet.get("role_config", {}).get("source", ""))
                         if isinstance(packet.get("role_config"), dict) else ""
