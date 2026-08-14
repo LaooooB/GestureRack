@@ -1,7 +1,6 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <array>
 #include <memory>
 #include <vector>
 #include "GestureBinding.h"
@@ -19,78 +18,9 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
-    bool dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint)
-    {
-        if (gesture == ControlGesture::unknown || ! parameterList.getBounds().contains (localPoint))
-            return false;
-
-        const auto point = parameterList.getLocalPoint (this, localPoint);
-        const auto row = parameterList.getRowContainingPosition (point.x, point.y);
-        if (! juce::isPositiveAndBelow (row, static_cast<int> (parameters.size()))
-            || ! parameters[static_cast<size_t> (row)].automatable)
-            return false;
-
-        juce::String error;
-        const auto ok = processor.addParameterGestureMapping (
-            parameters[static_cast<size_t> (row)].index, gesture, error);
-        if (ok)
-            refreshData (false);
-        return ok;
-    }
-
-    void mouseDown (const juce::MouseEvent& event) override
-    {
-        const auto point = event.getPosition();
-        for (int i = 0; i < static_cast<int> (gestureSourceRects.size()); ++i)
-            if (gestureSourceRects[static_cast<size_t> (i)].contains (point))
-            {
-                draggedGesture = gestureForSourceIndex (i);
-                draggingGesture = draggedGesture != ControlGesture::unknown;
-                dragPoint = point;
-                repaint();
-                return;
-            }
-    }
-
-    void mouseDrag (const juce::MouseEvent& event) override
-    {
-        if (! draggingGesture)
-            return;
-        dragPoint = event.getPosition();
-        repaint();
-    }
-
-    void mouseUp (const juce::MouseEvent& event) override
-    {
-        if (! draggingGesture)
-            return;
-
-        const auto point = event.getPosition();
-        juce::String error;
-        if (activeDropRect.contains (point))
-            processor.addSlotActionGestureMapping (draggedGesture, MappingMode::triggerSetActive, error);
-        else if (bypassDropRect.contains (point))
-            processor.addSlotActionGestureMapping (draggedGesture, MappingMode::triggerSetBypassed, error);
-        else if (learnDropRect.contains (point))
-        {
-            if (processor.isParameterLearnArmed())
-                processor.cancelParameterLearn();
-            processor.beginParameterLearn (draggedGesture, error);
-        }
-        else if (parameterList.getBounds().contains (point))
-        {
-            const auto local = parameterList.getLocalPoint (this, point);
-            const auto row = parameterList.getRowContainingPosition (local.x, local.y);
-            if (juce::isPositiveAndBelow (row, static_cast<int> (parameters.size()))
-                && parameters[static_cast<size_t> (row)].automatable)
-                processor.addParameterGestureMapping (parameters[static_cast<size_t> (row)].index,
-                                                      draggedGesture, error);
-        }
-
-        draggingGesture = false;
-        draggedGesture = ControlGesture::unknown;
-        repaint();
-    }
+    // Primary product interaction: drag a gesture from the single gesture palette
+    // in PluginEditor and drop it directly on an automatable parameter row.
+    bool dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint);
 
 private:
     class ParameterListModel;
@@ -104,24 +34,8 @@ private:
     void applySelectedMappingControls();
     void updateControlEnablement();
 
-    ControlGesture getSelectedGesture() const;
-    static ControlGesture gestureForSourceIndex (int index)
-    {
-        switch (index)
-        {
-            case 0: return ControlGesture::openPalm;
-            case 1: return ControlGesture::closedFist;
-            case 2: return ControlGesture::victory;
-            case 3: return ControlGesture::thumbUp;
-            case 4: return ControlGesture::thumbDown;
-            case 5: return ControlGesture::pointRight;
-            case 6: return ControlGesture::pointLeft;
-            default:return ControlGesture::unknown;
-        }
-    }
-    void mapSelectedParameter();
-    void beginLearn();
     juce::String describeBinding (const GestureBinding& binding) const;
+    juce::String gestureBadgesForParameter (const ParameterDescriptor& descriptor) const;
     int getMappingCountForParameter (const ParameterDescriptor& descriptor) const;
     bool isParameterMappingResolved (const GestureBinding& binding) const;
 
@@ -132,35 +46,18 @@ private:
     juce::ListBox parameterList;
     juce::ListBox mappingList;
 
-    juce::ComboBox gestureBox;
-    juce::ToggleButton testEnableButton { "TEST" };
-    juce::Slider heightSlider;
-    juce::TextButton triggerButton { "TEST ENTER" };
-    juce::TextButton learnButton { "LEARN" };
-
+    juce::Label helpLabel;
     juce::Label statusLabel;
-    juce::Label learnStatusLabel;
-    juce::Label selectedParameterLabel;
 
     juce::Slider minSlider;
     juce::Slider maxSlider;
     juce::Slider smoothingSlider;
     juce::Slider deadbandSlider;
-    juce::ToggleButton invertButton { "INV" };
+    juce::ToggleButton invertButton { "INVERT" };
     juce::ToggleButton mappingEnabledButton { "ON" };
     juce::TextButton removeMappingButton { "REMOVE" };
-    // Smoothing presets: Live (25 ms, snappy) is the new default; Smooth
-    // (80 ms) keeps the old gentle response available as a one-tap choice.
-    juce::TextButton livePresetButton { "LIVE" };
-    juce::TextButton smoothPresetButton { "SMOOTH" };
-
-    std::array<juce::Rectangle<int>, 7> gestureSourceRects {};
-    juce::Rectangle<int> activeDropRect;
-    juce::Rectangle<int> bypassDropRect;
-    juce::Rectangle<int> learnDropRect;
-    bool draggingGesture = false;
-    ControlGesture draggedGesture = ControlGesture::unknown;
-    juce::Point<int> dragPoint;
+    juce::TextButton livePresetButton { "LIVE 25ms" };
+    juce::TextButton smoothPresetButton { "SMOOTH 80ms" };
 
     std::vector<ParameterDescriptor> parameters;
     std::vector<GestureBinding> mappings;
