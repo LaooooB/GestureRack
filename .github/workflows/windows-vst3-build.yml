@@ -10,13 +10,20 @@ on:
 jobs:
   build-vst3:
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install vision test dependency
-        run: python -m pip install --disable-pip-version-check numpy
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: VisionEngine/requirements.txt
+
+      - name: Install vision build dependencies
+        run: python -m pip install --disable-pip-version-check -r VisionEngine/requirements.txt pyinstaller
 
       - name: Compile-check vision entrypoints
         working-directory: VisionEngine
@@ -26,13 +33,49 @@ jobs:
         working-directory: VisionEngine
         run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py test_landmark_features.py test_gesture_dataset.py test_tiny_landmark_classifier.py test_shadow_evaluator.py
 
+      - name: Download bundled MediaPipe gesture model
+        working-directory: VisionEngine
+        run: python -c "from pathlib import Path; from vision_engine import ensure_model; ensure_model(Path('models/gesture_recognizer.task'))"
+
+      - name: Build GestureVisionEngine EXE
+        working-directory: VisionEngine
+        run: pyinstaller --clean --noconfirm GestureVisionEngine.spec
+
+      - name: Smoke-test frozen VisionEngine
+        run: '& .\VisionEngine\dist\GestureVisionEngine.exe --help'
+
       - name: Configure JUCE project
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=ON
 
       - name: Build GestureRack VST3
         run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
 
-      - name: Upload Gesture Rack VST3
+      - name: Stage Windows package
+        shell: pwsh
+        run: |
+          $package = "release/GestureRack-Windows-Package"
+          New-Item -ItemType Directory -Force "$package/VST3" | Out-Null
+          Copy-Item -Recurse -Force "build/GestureRack_artefacts/Release/VST3/*" "$package/VST3/"
+          Copy-Item -Force "VisionEngine/dist/GestureVisionEngine.exe" "$package/GestureVisionEngine.exe"
+          Copy-Item -Force "packaging/windows/使用说明-快速开始.txt" "$package/使用说明-快速开始.txt"
+          @(
+            "Gesture Rack Windows Package",
+            "Commit: $env:GITHUB_SHA",
+            "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
+            "Vision shadow classifier: disabled by default"
+          ) | Set-Content -Encoding UTF8 "$package/VERSION.txt"
+          if (-not (Test-Path "$package/GestureVisionEngine.exe")) { throw "VisionEngine EXE missing" }
+          if (-not (Test-Path "$package/VST3/Gesture Rack.vst3")) { throw "Gesture Rack VST3 missing" }
+
+      - name: Upload complete Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestureRack-Windows-Package
+          path: release/GestureRack-Windows-Package/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Gesture Rack VST3 only
         uses: actions/upload-artifact@v4
         with:
           name: GestureRack-Windows-VST3
