@@ -44,6 +44,10 @@ void parseHand (juce::DynamicObject* object, HandSnapshot& hand)
     hand.palmX = static_cast<float> (object->getProperty ("palm_x"));
     hand.palmY = static_cast<float> (object->getProperty ("palm_y"));
     hand.palmZ = static_cast<float> (object->getProperty ("palm_z"));
+    const auto rawHeightVar = object->getProperty ("height_raw");
+    hand.rawHeight = rawHeightVar.isVoid()
+        ? juce::jlimit (0.0f, 1.0f, static_cast<float> (object->getProperty ("height")))
+        : juce::jlimit (0.0f, 1.0f, static_cast<float> (rawHeightVar));
     hand.height = juce::jlimit (0.0f, 1.0f, static_cast<float> (object->getProperty ("height")));
     parseLandmarks (object->getProperty ("landmarks"), hand.landmarks);
 }
