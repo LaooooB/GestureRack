@@ -6,8 +6,7 @@
 #include "ParameterInspector.h"
 
 class GestureRackAudioProcessorEditor final : public juce::AudioProcessorEditor,
-                                              private juce::Timer,
-                                              public juce::FileDragAndDropTarget
+                                              private juce::Timer
 {
 public:
     explicit GestureRackAudioProcessorEditor (GestureRackAudioProcessor&);
@@ -15,108 +14,6 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void mouseDown (const juce::MouseEvent&) override;
-    void mouseDrag (const juce::MouseEvent&) override;
-    void mouseUp (const juce::MouseEvent&) override;
-
-    void paintOverChildren (juce::Graphics& g) override
-    {
-        auto content = getLocalBounds().reduced (24);
-        content.removeFromTop (112);
-        content.removeFromBottom (58);
-        auto panel = content.removeFromLeft (juce::jlimit (300, 420, content.getWidth() * 32 / 100));
-
-        g.setColour (juce::Colour::fromRGB (18, 21, 27));
-        g.fillRoundedRectangle (panel.toFloat(), 14.0f);
-        g.setColour (juce::Colour::fromRGB (226, 231, 238));
-        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-        g.drawText ("GESTURE MODULATORS", panel.getX() + 16, panel.getY() + 14,
-                    panel.getWidth() - 32, 20, juce::Justification::centredLeft);
-
-        g.setColour (juce::Colour::fromRGB (116, 125, 140));
-        g.setFont (juce::FontOptions (9.0f));
-        g.drawText ("DRAG A GESTURE TO A TARGET OR PARAMETER",
-                    panel.getX() + 16, panel.getY() + 34,
-                    panel.getWidth() - 32, 16, juce::Justification::centredLeft);
-
-        const auto live = processor.getLiveRightGesture();
-        const std::array<gr::ControlGesture, 7> gestures {
-            gr::ControlGesture::openPalm, gr::ControlGesture::closedFist,
-            gr::ControlGesture::victory, gr::ControlGesture::thumbUp,
-            gr::ControlGesture::thumbDown, gr::ControlGesture::pointRight,
-            gr::ControlGesture::pointLeft
-        };
-        auto row = panel.reduced (16).withTrimmedTop (48).removeFromTop (36);
-        const auto gap = 5;
-        const auto width = juce::jmax (1, (row.getWidth() - gap * 6) / 7);
-        for (int i = 0; i < static_cast<int> (gestures.size()); ++i)
-        {
-            const auto gesture = gestures[static_cast<size_t> (i)];
-            auto chip = row.removeFromLeft (width);
-            gestureRects[static_cast<size_t> (i)] = chip;
-            g.setColour (gesture == live ? juce::Colour::fromRGB (69, 109, 190)
-                                         : juce::Colour::fromRGB (29, 34, 43));
-            g.fillRoundedRectangle (chip.toFloat(), 7.0f);
-            g.setColour (juce::Colour::fromRGB (190, 199, 212));
-            g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
-            g.drawFittedText (gr::controlGestureToString (gesture).toUpperCase(), chip.reduced (2),
-                              juce::Justification::centred, 1);
-            row.removeFromLeft (gap);
-        }
-
-        auto targets = panel.reduced (16).withTrimmedTop (104).removeFromTop (42);
-        activeTargetRect = targets.removeFromLeft ((targets.getWidth() - 8) / 2);
-        targets.removeFromLeft (8);
-        bypassTargetRect = targets;
-        learnTargetRect = panel.reduced (16).withTrimmedTop (154).removeFromTop (42);
-
-        const auto drawTarget = [&] (juce::Rectangle<int> rect, const juce::String& text)
-        {
-            const auto hot = gestureDragging && rect.contains (gestureDragPoint);
-            g.setColour (hot ? juce::Colour::fromRGB (69, 109, 190)
-                             : juce::Colour::fromRGB (24, 28, 35));
-            g.fillRoundedRectangle (rect.toFloat(), 8.0f);
-            g.setColour (hot ? juce::Colour::fromRGB (232, 241, 255)
-                             : juce::Colour::fromRGB (118, 128, 144));
-            g.drawRoundedRectangle (rect.toFloat(), 8.0f, 1.0f);
-            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-            g.drawText (text, rect, juce::Justification::centred);
-        };
-
-        drawTarget (activeTargetRect, "ACTIVE");
-        drawTarget (bypassTargetRect, "BYPASS");
-        drawTarget (learnTargetRect,
-                    processor.isParameterLearnArmed() ? "LEARNING PARAMETER..." : "PARAMETER LEARN");
-    }
-
-    bool isInterestedInFileDrag (const juce::StringArray& files) override
-    {
-        for (const auto& path : files)
-            if (path.endsWithIgnoreCase (".vst3"))
-                return true;
-        return false;
-    }
-
-    void filesDropped (const juce::StringArray& files, int x, int y) override
-    {
-        int targetSlot = processor.getSelectedSlot();
-        for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
-            if (slotButtons[static_cast<size_t> (i)].getBounds().contains (x, y))
-            {
-                targetSlot = i;
-                break;
-            }
-
-        for (const auto& path : files)
-            if (path.endsWithIgnoreCase (".vst3"))
-            {
-                processor.setSelectedSlot (targetSlot);
-                processor.loadVst3FromFile (targetSlot, juce::File (path));
-                updateSlotButtons();
-                repaint();
-                break;
-            }
-    }
 
 private:
     void timerCallback() override;
@@ -132,14 +29,6 @@ private:
     GestureRackAudioProcessor& processor;
 
     std::array<juce::TextButton, GestureRackAudioProcessor::slotCount> slotButtons;
-    std::array<juce::Rectangle<int>, GestureRackAudioProcessor::slotCount> slotDropRects {};
-    std::array<juce::Rectangle<int>, 7> gestureRects {};
-    juce::Rectangle<int> activeTargetRect;
-    juce::Rectangle<int> bypassTargetRect;
-    juce::Rectangle<int> learnTargetRect;
-    bool gestureDragging = false;
-    gr::ControlGesture draggedGesture = gr::ControlGesture::unknown;
-    juce::Point<int> gestureDragPoint;
     juce::TextButton loadButton { "LOAD / REPLACE" };
     juce::TextButton openButton { "OPEN PLUGIN" };
     juce::TextButton removeButton { "REMOVE" };

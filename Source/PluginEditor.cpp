@@ -97,9 +97,9 @@ void GestureRackAudioProcessorEditor::updateSlotButtons()
         if (name.length() > 11)
             name = name.substring (0, 8) + "...";
 
-        auto text = juce::String (i + 1) + "  "
-                  + (loaded ? name : "+ DROP VST3")
-                  + "  |  " + juce::String (mappingCount) + " MOD";
+        auto text = juce::String (i + 1) + "  " + (loaded ? name : "EMPTY");
+        if (mappingCount > 0)
+            text += "  [" + juce::String (mappingCount) + "]";
 
         button.setButtonText (text);
         button.setTooltip ("Slot " + juce::String (i + 1) + ": "
@@ -145,32 +145,7 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour::fromRGB (235, 238, 242));
     g.setFont (juce::FontOptions (25.0f, juce::Font::bold));
-    g.drawText ("GESTURE RACK", 24, 14, 250, 32, juce::Justification::centredLeft);
-
-    const auto topSnapshot = processor.getDualHandVisionSnapshot();
-    const auto topConnected = processor.isVisionConnected();
-    const auto packetAge = topSnapshot.receivedAtMs > 0
-        ? juce::jmax<int64_t> (0, juce::Time::currentTimeMillis() - topSnapshot.receivedAtMs)
-        : static_cast<int64_t> (0);
-    const auto leftText = topSnapshot.left.present && topSnapshot.left.stableSlot > 0
-        ? juce::String (topSnapshot.left.stableSlot)
-        : juce::String ("--");
-    const auto rightText = topSnapshot.right.present
-        ? gr::controlGestureToString (topSnapshot.right.stableGesture).toUpperCase()
-        : juce::String ("--");
-    const auto health = topConnected
-        ? "CAM " + juce::String (topSnapshot.captureFps, 1)
-          + "  VISION " + juce::String (topSnapshot.visionFps, 1)
-          + "  LAT " + juce::String (topSnapshot.captureToResultMs, 0) + " ms"
-          + "  AGE " + juce::String (packetAge) + " ms"
-          + "  |  LEFT " + leftText
-          + "  RIGHT " + rightText
-        : juce::String ("VISION OFFLINE  |  START GESTURE VISION ENGINE");
-    g.setColour (topConnected ? juce::Colour::fromRGB (150, 210, 175)
-                              : juce::Colour::fromRGB (235, 120, 104));
-    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawFittedText (health, 290, 14, getWidth() - 314, 32,
-                      juce::Justification::centredRight, 1);
+    g.drawText ("GESTURE RACK", 24, 14, getWidth() - 48, 32, juce::Justification::centredLeft);
 
     g.setColour (juce::Colour::fromRGB (104, 111, 126));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
