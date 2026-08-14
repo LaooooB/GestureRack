@@ -98,7 +98,7 @@ class TinyLandmarkClassifier:
         hidden = np.maximum(0.0, standardized @ self.w1 + self.b1)
         logits = hidden @ self.w2 + self.b2
         logits = logits - float(np.max(logits))
-        exp_logits = np.exp(logits, dtype=np.float32)
+        exp_logits = np.exp(logits).astype(np.float32, copy=False)
         denominator = float(np.sum(exp_logits))
         if denominator <= 0.0 or not np.isfinite(denominator):
             return TinyGesturePrediction()
