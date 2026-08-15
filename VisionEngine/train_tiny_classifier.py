@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
 
+from gesture_dataset import RIGHT_DATASET_LABELS
 from landmark_features import FEATURE_VERSION
 
 
@@ -32,10 +33,13 @@ def load_records(paths: list[Path]) -> tuple[np.ndarray, np.ndarray, np.ndarray,
                 if not label:
                     raise ValueError(f"{path}:{line_number}: missing label")
 
-                # A full sidecar session is the evaluation group. Adjacent frames
-                # from one recording must never leak into both train and test.
+                # Prefer an explicit guided-capture group. This lets a user record
+                # all eight classes in one controlled pass without restarting the
+                # production sidecar between labels. Older datasets fall back to
+                # sidecar session_id, then file stem.
+                recording_group = str(record.get("recording_group", "")).strip()
                 session_id = str(record.get("session_id", "")).strip()
-                group = session_id if session_id else path.stem
+                group = recording_group or session_id or path.stem
                 heuristic_record = record.get("heuristic", {})
                 heuristic_label = (str(heuristic_record.get("gesture", "None"))
                                    if isinstance(heuristic_record, dict) else "None")
@@ -53,6 +57,62 @@ def load_records(paths: list[Path]) -> tuple[np.ndarray, np.ndarray, np.ndarray,
         np.asarray(groups, dtype=str),
         np.asarray(heuristic, dtype=str),
     )
+
+
+def dataset_quality_summary(y: np.ndarray, groups: np.ndarray) -> dict:
+    counts = Counter(y.tolist())
+    groups_by_label: dict[str, set[str]] = defaultdict(set)
+    for label, group in zip(y.tolist(), groups.tolist()):
+        groups_by_label[str(label)].add(str(group))
+
+    return {
+        "label_counts": {label: int(counts.get(label, 0)) for label in RIGHT_DATASET_LABELS},
+        "groups_per_label": {
+            label: len(groups_by_label.get(label, set())) for label in RIGHT_DATASET_LABELS
+        },
+        "groups": sorted(set(groups.tolist())),
+        "missing_labels": [label for label in RIGHT_DATASET_LABELS if counts.get(label, 0) <= 0],
+    }
+
+
+def validate_dataset_quality(y: np.ndarray, groups: np.ndarray,
+                             min_samples_per_class: int,
+                             min_groups_per_class: int) -> dict:
+    summary = dataset_quality_summary(y, groups)
+    missing = summary["missing_labels"]
+    if missing:
+        raise ValueError(
+            "dataset is missing required classes: " + ", ".join(missing)
+            + ". Include None hard negatives plus all seven control gestures."
+        )
+
+    low_samples = [
+        label for label, count in summary["label_counts"].items()
+        if count < min_samples_per_class
+    ]
+    if low_samples:
+        details = ", ".join(
+            f"{label}={summary['label_counts'][label]}" for label in low_samples)
+        raise ValueError(
+            f"not enough samples per class ({details}); need at least {min_samples_per_class} each"
+        )
+
+    low_groups = [
+        label for label, count in summary["groups_per_label"].items()
+        if count < min_groups_per_class
+    ]
+    if low_groups:
+        details = ", ".join(
+            f"{label}={summary['groups_per_label'][label]}" for label in low_groups)
+        raise ValueError(
+            f"not enough independent recording groups ({details}); need at least {min_groups_per_class} per class. "
+            "Run collect_gesture_session.py again under different position/lighting/distance conditions."
+        )
+
+    summary["min_samples_per_class_required"] = int(min_samples_per_class)
+    summary["min_groups_per_class_required"] = int(min_groups_per_class)
+    summary["passed"] = True
+    return summary
 
 
 def choose_group_split(x: np.ndarray, y: np.ndarray, groups: np.ndarray,
@@ -137,7 +197,13 @@ def train(args) -> dict:
     from sklearn.preprocessing import StandardScaler
 
     x, y, groups, heuristic_predictions = load_records(args.datasets)
-    labels = sorted(np.unique(y).tolist())
+    quality = validate_dataset_quality(
+        y,
+        groups,
+        min_samples_per_class=args.min_samples_per_class,
+        min_groups_per_class=args.min_groups_per_class,
+    )
+    labels = list(RIGHT_DATASET_LABELS)
     train_indices, test_indices = choose_group_split(
         x, y, groups, args.test_size, args.random_state)
 
@@ -174,7 +240,8 @@ def train(args) -> dict:
     )
 
     min_tiny_recall = min(
-        tiny_metrics["per_class"][label]["recall"] for label in labels)
+        tiny_metrics["per_class"][label]["recall"] for label in labels
+    )
     promotion_eligible = (
         tiny_metrics["macro_f1"] >= baseline_metrics["macro_f1"] + args.min_macro_improvement
         and min_tiny_recall >= args.min_class_recall
@@ -205,6 +272,7 @@ def train(args) -> dict:
         "labels": labels,
         "samples": int(len(x)),
         "label_counts": dict(Counter(y.tolist())),
+        "dataset_quality": quality,
         "train_sessions": sorted(np.unique(groups[train_indices]).tolist()),
         "test_sessions": sorted(np.unique(groups[test_indices]).tolist()),
         "tiny_model": tiny_metrics,
@@ -228,7 +296,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train the Gesture Rack physical-right tiny landmark classifier")
     parser.add_argument("datasets", nargs="+", type=Path,
-                        help="JSONL files recorded by GestureDatasetRecorder")
+                        help="JSONL files recorded by GestureDatasetRecorder or collect_gesture_session.py")
     parser.add_argument("--output", type=Path,
                         default=Path("models/right_gesture_landmark_v1.npz"))
     parser.add_argument("--test-size", type=float, default=0.25)
@@ -238,6 +306,10 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--max-iter", type=int, default=500)
     parser.add_argument("--random-state", type=int, default=41)
+    parser.add_argument("--min-samples-per-class", type=int, default=80,
+                        help="Refuse training when any gesture has fewer independent frame samples")
+    parser.add_argument("--min-groups-per-class", type=int, default=2,
+                        help="Refuse training unless every class appears in this many independent guided capture groups")
     parser.add_argument("--min-macro-improvement", type=float, default=0.02,
                         help="Shadow model must beat held-out heuristic macro-F1 by this amount")
     parser.add_argument("--min-class-recall", type=float, default=0.90,
@@ -248,12 +320,17 @@ def main() -> None:
         parser.error("--test-size must be between 0.05 and 0.5")
     if not 1 <= args.hidden <= 128:
         parser.error("--hidden must be in 1..128")
+    if args.min_samples_per_class < 1:
+        parser.error("--min-samples-per-class must be positive")
+    if args.min_groups_per_class < 2:
+        parser.error("--min-groups-per-class must be at least 2")
 
     report = train(args)
     gate = report["promotion_gate"]
     print(json.dumps({
         "model": report["model"],
         "samples": report["samples"],
+        "groups": len(report["dataset_quality"]["groups"]),
         "tiny_macro_f1": report["tiny_model"]["macro_f1"],
         "heuristic_macro_f1": report["heuristic_baseline"]["macro_f1"],
         "promotion_eligible": gate["eligible"],
