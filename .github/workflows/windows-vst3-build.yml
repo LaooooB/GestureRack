@@ -7,6 +7,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: windows-vst3-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-vst3:
     runs-on: windows-2022
