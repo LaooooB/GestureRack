@@ -82,6 +82,20 @@ juce::var makeCommand (const juce::String& name)
     object->setProperty ("command", name);
     return juce::var (object);
 }
+
+bool physicalRolesTrusted (const DualHandVisionSnapshot& snapshot)
+{
+    if (snapshot.protocol < 2)
+        return true;
+    if (snapshot.handCalibrationActive)
+        return false;
+
+    const auto source = snapshot.handRoleSource.trim().toUpperCase();
+    return source.isNotEmpty()
+        && source != "UNCALIBRATED"
+        && source != "CALIBRATING"
+        && source != "DEFAULT";
+}
 }
 
 VisionReceiver::VisionReceiver()
@@ -277,6 +291,18 @@ void VisionReceiver::parsePacket (const juce::String& jsonText)
             parseHand (leftVar.getDynamicObject(), next.left);
         if (const auto rightVar = object->getProperty ("right"); rightVar.isObject())
             parseHand (rightVar.getDynamicObject(), next.right);
+
+        // Physical role is a hard safety boundary. Before the camera/backend has
+        // been calibrated (or explicitly manually overridden), keep raw
+        // detections and landmarks available for the UI but fail closed on the
+        // stable control fields. This prevents the same two-finger pose from
+        // silently selecting Slot 2 with the wrong hand or firing Victory on the
+        // selector hand while the L/R convention is still unknown.
+        if (! physicalRolesTrusted (next))
+        {
+            next.left.stableSlot = 0;
+            next.right.stableGesture = ControlGesture::unknown;
+        }
     }
 
     // Liveness tracks actual packet arrival independently from control-data age.
