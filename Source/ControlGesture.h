@@ -31,6 +31,21 @@ inline juce::String controlGestureToString (ControlGesture gesture)
     }
 }
 
+inline juce::String controlGestureToShortLabel (ControlGesture gesture)
+{
+    switch (gesture)
+    {
+        case ControlGesture::openPalm:   return "PALM";
+        case ControlGesture::closedFist: return "FIST";
+        case ControlGesture::victory:    return "VICTORY";
+        case ControlGesture::thumbUp:    return "UP";
+        case ControlGesture::thumbDown:  return "DOWN";
+        case ControlGesture::pointRight: return "RIGHT";
+        case ControlGesture::pointLeft:  return "LEFT";
+        default:                         return "?";
+    }
+}
+
 inline juce::String controlGestureToEmoji (ControlGesture gesture)
 {
     switch (gesture)
