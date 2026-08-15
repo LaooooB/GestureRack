@@ -56,7 +56,7 @@ public:
         }
 
         const auto badges = owner.gestureBadgesForParameter (parameter);
-        auto badgeArea = bounds.removeFromRight (170);
+        auto badgeArea = bounds.removeFromRight (190);
         auto valueArea = bounds.removeFromRight (104);
 
         g.setColour (parameter.automatable ? kTitle : kSecondary);
@@ -73,7 +73,8 @@ public:
         if (isDropTarget)
         {
             const auto label = parameter.automatable
-                ? controlGestureToEmoji (owner.gestureDropPreview) + "  RELEASE TO ASSIGN"
+                ? controlGestureToEmoji (owner.gestureDropPreview) + " "
+                    + controlGestureToShortLabel (owner.gestureDropPreview) + "  RELEASE TO ASSIGN"
                 : juce::String ("NOT AUTOMATABLE");
             g.setColour (parameter.automatable ? kGreen : kRed);
             g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
@@ -82,7 +83,7 @@ public:
         else if (badges.isNotEmpty())
         {
             g.setColour (kAccent);
-            g.setFont (juce::FontOptions (15.0f));
+            g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
             g.drawFittedText (badges, badgeArea, juce::Justification::centredRight, 1);
         }
         else if (parameter.automatable)
@@ -326,7 +327,8 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
             mappingList.selectRow (selectedMappingRow, false, true);
         loadSelectedMappingControls();
     }
-    statusLabel.setText (controlGestureToEmoji (gesture) + "  \xE2\x86\x92  " + parameterName
+    statusLabel.setText (controlGestureToEmoji (gesture) + " " + controlGestureToShortLabel (gesture)
+                         + "  \xE2\x86\x92  " + parameterName
                          + "  ASSIGNED  —  HOLD THE GESTURE + MOVE RIGHT HAND UP / DOWN",
                          juce::dontSendNotification);
     repaint();
@@ -479,8 +481,9 @@ juce::String ParameterInspector::gestureBadgesForParameter (const ParameterDescr
         if (! mappingTargetsParameter (binding, descriptor))
             continue;
         if (badges.isNotEmpty())
-            badges += "  ";
-        badges += controlGestureToEmoji (binding.sourceGesture);
+            badges += "   ";
+        badges += controlGestureToEmoji (binding.sourceGesture) + " "
+               + controlGestureToShortLabel (binding.sourceGesture);
     }
     return badges;
 }
@@ -502,7 +505,8 @@ juce::String ParameterInspector::describeBinding (const GestureBinding& binding)
         ? mappingModeToString (binding.mode)
         : binding.parameterName;
 
-    auto text = controlGestureToEmoji (binding.sourceGesture) + "  " + target;
+    auto text = controlGestureToEmoji (binding.sourceGesture) + " "
+              + controlGestureToShortLabel (binding.sourceGesture) + "  ->  " + target;
     if (binding.targetType == MappingTargetType::childParameter)
     {
         text += "  " + juce::String (binding.minValue * 100.0f, 0) + "-"
