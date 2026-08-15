@@ -33,6 +33,7 @@ private:
     void loadSelectedMappingControls();
     void applySelectedMappingControls();
     void updateControlEnablement();
+    void updateAdvancedVisibility();
 
     juce::String describeBinding (const GestureBinding& binding) const;
     juce::String gestureBadgesForParameter (const ParameterDescriptor& descriptor) const;
@@ -48,6 +49,7 @@ private:
 
     juce::Label helpLabel;
     juce::Label statusLabel;
+    juce::TextButton advancedButton { "ADVANCED" };
 
     juce::Slider minSlider;
     juce::Slider maxSlider;
@@ -65,6 +67,7 @@ private:
     int selectedMappingRow = -1;
     int lastSlot = -1;
     juce::String lastPluginName;
+    bool advancedExpanded = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParameterInspector)
 };
