@@ -44,6 +44,13 @@ jobs:
       - name: Smoke-test frozen VisionEngine
         run: '& .\VisionEngine\dist\GestureVisionEngine.exe --help'
 
+      - name: Build GestureDataCollector EXE
+        working-directory: VisionEngine
+        run: pyinstaller --clean --noconfirm GestureDataCollector.spec
+
+      - name: Smoke-test frozen GestureDataCollector
+        run: '& .\VisionEngine\dist\GestureDataCollector.exe --help'
+
       - name: Configure JUCE project
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=ON
 
@@ -59,20 +66,25 @@ jobs:
           New-Item -ItemType Directory -Force "$package/VST3" | Out-Null
           Copy-Item -Recurse -Force $vst3Source "$package/VST3/Gesture Rack.vst3"
           Copy-Item -Force "VisionEngine/dist/GestureVisionEngine.exe" "$package/GestureVisionEngine.exe"
+          Copy-Item -Force "VisionEngine/dist/GestureDataCollector.exe" "$package/GestureDataCollector.exe"
           Copy-Item -Force "packaging/windows/使用说明-快速开始.txt" "$package/使用说明-快速开始.txt"
           @(
             "Gesture Rack Windows Package",
             "Commit: $env:GITHUB_SHA",
             "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
-            "Vision shadow classifier: disabled by default"
+            "Vision shadow classifier: disabled by default",
+            "GestureDataCollector.exe: optional guided full-class recognition dataset capture"
           ) | Set-Content -Encoding UTF8 "$package/VERSION.txt"
           if (-not (Test-Path "$package/GestureVisionEngine.exe")) { throw "VisionEngine EXE missing" }
+          if (-not (Test-Path "$package/GestureDataCollector.exe")) { throw "GestureDataCollector EXE missing" }
           if (-not (Test-Path $vst3Source)) { throw "Gesture Rack VST3 source bundle missing" }
           if (-not (Test-Path $vst3Binary)) { throw "Gesture Rack VST3 binary missing after staging" }
           $visionHash = (Get-FileHash "$package/GestureVisionEngine.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $collectorHash = (Get-FileHash "$package/GestureDataCollector.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
           $vst3Hash = (Get-FileHash $vst3Binary -Algorithm SHA256).Hash.ToLowerInvariant()
           @(
             "$visionHash  GestureVisionEngine.exe",
+            "$collectorHash  GestureDataCollector.exe",
             "$vst3Hash  VST3/Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3"
           ) | Set-Content -Encoding ASCII "$package/SHA256SUMS.txt"
 
