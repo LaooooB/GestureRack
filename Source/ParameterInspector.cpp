@@ -5,7 +5,7 @@ namespace gr
 {
 namespace
 {
-const juce::Colour kBg        { 247, 248, 250 };
+const juce::Colour kBg        { 255, 255, 255 };
 const juce::Colour kBorder    { 205, 210, 218 };
 const juce::Colour kRecessed  { 235, 238, 242 };
 const juce::Colour kTitle     { 45, 48, 56 };
@@ -47,7 +47,7 @@ public:
         }
 
         const auto badges = owner.gestureBadgesForParameter (parameter);
-        auto badgeArea = bounds.removeFromRight (96);
+        auto badgeArea = bounds.removeFromRight (144);
         auto valueArea = bounds.removeFromRight (104);
 
         g.setColour (parameter.automatable ? kTitle : kSecondary);
@@ -69,9 +69,9 @@ public:
         }
         else if (parameter.automatable)
         {
-            g.setColour (kSecondary.withAlpha (0.72f));
+            g.setColour (kBlue);
             g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-            g.drawText ("DROP", badgeArea, juce::Justification::centredRight);
+            g.drawText ("+ DROP GESTURE", badgeArea, juce::Justification::centredRight);
         }
     }
 
@@ -131,7 +131,7 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
 {
     addAndMakeVisible (parameterList);
     addAndMakeVisible (mappingList);
-    parameterList.setRowHeight (30);
+    parameterList.setRowHeight (32);
     mappingList.setRowHeight (29);
     parameterList.setColour (juce::ListBox::backgroundColourId, juce::Colour (255, 255, 255));
     mappingList.setColour (juce::ListBox::backgroundColourId, juce::Colour (255, 255, 255));
@@ -139,7 +139,7 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     mappingList.setColour (juce::ListBox::outlineColourId, kBorder);
 
     addAndMakeVisible (helpLabel);
-    helpLabel.setText ("1  DRAG A GESTURE FROM THE LEFT   \xE2\x86\x92   2  DROP IT ON A PARAMETER",
+    helpLabel.setText ("1  DRAG A RIGHT-HAND GESTURE ABOVE   \xE2\x86\x92   2  DROP ON A PARAMETER   \xE2\x86\x92   3  HOLD IT + MOVE YOUR HAND UP / DOWN",
                        juce::dontSendNotification);
     helpLabel.setColour (juce::Label::textColourId, kTitle);
     helpLabel.setColour (juce::Label::backgroundColourId, kBlue.withAlpha (0.08f));
@@ -150,6 +150,18 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     statusLabel.setColour (juce::Label::textColourId, kSecondary);
     statusLabel.setFont (juce::FontOptions (10.0f, juce::Font::bold));
     statusLabel.setJustificationType (juce::Justification::centredLeft);
+
+    addAndMakeVisible (advancedButton);
+    advancedButton.setColour (juce::TextButton::buttonColourId, juce::Colour (255, 255, 255));
+    advancedButton.setColour (juce::TextButton::textColourOffId, kTitle);
+    advancedButton.setColour (juce::TextButton::textColourOnId, kTitle);
+    advancedButton.onClick = [this]
+    {
+        advancedExpanded = ! advancedExpanded;
+        updateAdvancedVisibility();
+        resized();
+        repaint();
+    };
 
     auto setupSlider = [] (juce::Slider& slider, double min, double max,
                            double step, double initial)
@@ -218,6 +230,7 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
         smoothingSlider.setValue (80.0, juce::sendNotificationSync);
     };
 
+    updateAdvancedVisibility();
     refreshData (true);
     startTimerHz (20);
 }
@@ -260,10 +273,12 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
     if (! mappings.empty())
     {
         selectedMappingRow = static_cast<int> (mappings.size()) - 1;
-        mappingList.selectRow (selectedMappingRow, false, true);
+        if (advancedExpanded)
+            mappingList.selectRow (selectedMappingRow, false, true);
         loadSelectedMappingControls();
     }
-    statusLabel.setText (controlGestureToEmoji (gesture) + "  \xE2\x86\x92  " + parameter.name + "  ASSIGNED",
+    statusLabel.setText (controlGestureToEmoji (gesture) + "  \xE2\x86\x92  " + parameter.name
+                         + "  ASSIGNED  —  HOLD THE GESTURE + MOVE RIGHT HAND UP / DOWN",
                          juce::dontSendNotification);
     repaint();
     return true;
@@ -275,6 +290,7 @@ void ParameterInspector::timerCallback()
     const auto pluginName = processor.getSlotPluginName (slot);
     const auto force = slot != lastSlot || pluginName != lastPluginName;
     refreshData (force);
+    repaint();
 }
 
 void ParameterInspector::refreshData (bool forceRebuild)
@@ -308,7 +324,7 @@ void ParameterInspector::refreshData (bool forceRebuild)
 
     if (forceRebuild)
         statusLabel.setText (parameters.empty() ? "LOAD A PLUGIN TO SEE ITS PARAMETERS"
-                                                : "DRAG A GESTURE ONTO ANY PARAMETER ROW",
+                                                : "DROP A RIGHT-HAND GESTURE ON ANY AUTOMATABLE PARAMETER",
                              juce::dontSendNotification);
 
     lastSlot = slot;
@@ -384,6 +400,19 @@ void ParameterInspector::updateControlEnablement()
     removeMappingButton.setEnabled (mappingSelected);
 }
 
+void ParameterInspector::updateAdvancedVisibility()
+{
+    mappingList.setVisible (advancedExpanded);
+    for (auto* slider : { &minSlider, &maxSlider, &smoothingSlider, &deadbandSlider })
+        slider->setVisible (advancedExpanded);
+    invertButton.setVisible (advancedExpanded);
+    mappingEnabledButton.setVisible (advancedExpanded);
+    removeMappingButton.setVisible (advancedExpanded);
+    livePresetButton.setVisible (advancedExpanded);
+    smoothPresetButton.setVisible (advancedExpanded);
+    advancedButton.setButtonText (advancedExpanded ? "BASIC" : "ADVANCED");
+}
+
 int ParameterInspector::getMappingCountForParameter (const ParameterDescriptor& descriptor) const
 {
     return static_cast<int> (std::count_if (mappings.begin(), mappings.end(), [&descriptor] (const GestureBinding& binding)
@@ -444,20 +473,42 @@ void ParameterInspector::paint (juce::Graphics& g)
 
     g.setColour (kTitle);
     g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-    g.drawText ("PARAMETER ASSIGNMENT", 14, 8, getWidth() - 28, 20,
+    g.drawText ("PARAMETER ASSIGNMENT", 14, 8, getWidth() - 240, 20,
                 juce::Justification::centredLeft);
+
+    const auto snapshot = processor.getDualHandVisionSnapshot();
+    auto meter = juce::Rectangle<int> (juce::jmax (14, getWidth() - 220), 8,
+                                       juce::jmin (206, getWidth() - 28), 20);
+    const auto rightPresent = snapshot.right.present;
+    const auto height = rightPresent ? juce::jlimit (0.0f, 1.0f, snapshot.right.height) : 0.0f;
+    g.setColour (kRecessed);
+    g.fillRoundedRectangle (meter.toFloat(), 5.0f);
+    if (rightPresent)
+    {
+        auto fill = meter.toFloat().reduced (1.0f);
+        fill.setWidth (juce::jmax (2.0f, fill.getWidth() * height));
+        g.setColour (kGreen.withAlpha (0.30f));
+        g.fillRoundedRectangle (fill, 4.0f);
+    }
+    g.setColour (rightPresent ? kTitle : kSecondary);
+    g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+    g.drawText (rightPresent
+                    ? "RIGHT HAND HEIGHT  " + juce::String (height * 100.0f, 0) + "%"
+                    : juce::String ("RIGHT HAND HEIGHT  --"),
+                meter, juce::Justification::centred);
 
     g.setColour (kSecondary);
     g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-    g.drawText ("PARAMETERS  —  DROP GESTURE HERE",
+    g.drawText ("PARAMETERS  —  DROP A RIGHT-HAND GESTURE HERE",
                 parameterList.getX(), parameterList.getY() - 18,
                 parameterList.getWidth(), 16, juce::Justification::centredLeft);
-    g.drawText ("ASSIGNED",
-                mappingList.getX(), mappingList.getY() - 18,
-                mappingList.getWidth(), 16, juce::Justification::centredLeft);
 
-    if (minSlider.isVisible())
+    if (advancedExpanded)
     {
+        g.drawText ("ASSIGNED / EDIT",
+                    mappingList.getX(), mappingList.getY() - 18,
+                    mappingList.getWidth(), 16, juce::Justification::centredLeft);
+
         const auto labelY = minSlider.getY() - 16;
         g.drawText ("MIN", minSlider.getX(), labelY, minSlider.getWidth(), 14,
                     juce::Justification::centredLeft);
@@ -475,8 +526,30 @@ void ParameterInspector::resized()
     auto bounds = getLocalBounds().reduced (14);
     bounds.removeFromTop (24);
 
-    helpLabel.setBounds (bounds.removeFromTop (32).reduced (0, 2));
+    helpLabel.setBounds (bounds.removeFromTop (34).reduced (0, 2));
     bounds.removeFromTop (24);
+
+    auto footer = bounds.removeFromBottom (30);
+    advancedButton.setBounds (footer.removeFromRight (98));
+    footer.removeFromRight (8);
+    statusLabel.setBounds (footer);
+    bounds.removeFromBottom (8);
+
+    if (! advancedExpanded)
+    {
+        parameterList.setBounds (bounds);
+        mappingList.setBounds ({ });
+        minSlider.setBounds ({ });
+        maxSlider.setBounds ({ });
+        smoothingSlider.setBounds ({ });
+        deadbandSlider.setBounds ({ });
+        invertButton.setBounds ({ });
+        mappingEnabledButton.setBounds ({ });
+        removeMappingButton.setBounds ({ });
+        livePresetButton.setBounds ({ });
+        smoothPresetButton.setBounds ({ });
+        return;
+    }
 
     auto advanced = bounds.removeFromBottom (112);
     bounds.removeFromBottom (8);
@@ -510,8 +583,6 @@ void ParameterInspector::resized()
     mappingEnabledButton.setBounds (actionRow.removeFromLeft (52));
     actionRow.removeFromLeft (8);
     removeMappingButton.setBounds (actionRow.removeFromLeft (82));
-    actionRow.removeFromLeft (10);
-    statusLabel.setBounds (actionRow);
 }
 
 }
