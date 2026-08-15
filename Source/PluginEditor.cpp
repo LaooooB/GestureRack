@@ -205,6 +205,7 @@ void GestureRackAudioProcessorEditor::choosePluginForSelectedSlot()
 
 void GestureRackAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
 {
+    parameterInspector.clearGestureDragPreview();
     const auto p = e.getPosition();
     for (int i = 0; i < static_cast<int> (gestureRects.size()); ++i)
         if (gestureRects[static_cast<size_t> (i)].contains (p))
@@ -227,7 +228,13 @@ void GestureRackAudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
 {
     if (! gestureDragging)
         return;
+
     gestureDragPoint = e.getPosition();
+    if (parameterInspector.getBounds().contains (gestureDragPoint))
+        parameterInspector.setGestureDragPreview (
+            draggedGesture, parameterInspector.getLocalPoint (this, gestureDragPoint));
+    else
+        parameterInspector.clearGestureDragPreview();
     repaint();
 }
 
@@ -246,6 +253,7 @@ void GestureRackAudioProcessorEditor::mouseUp (const juce::MouseEvent& e)
     else if (parameterInspector.getBounds().contains (p))
         parameterInspector.dropGestureAt (draggedGesture, parameterInspector.getLocalPoint (this, p));
 
+    parameterInspector.clearGestureDragPreview();
     gestureDragging = false;
     draggedGesture = gr::ControlGesture::unknown;
     repaint();
@@ -272,12 +280,12 @@ void GestureRackAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
 
     g.setColour (kTitle);
     g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-    g.drawText ("GESTURE SOURCES", panel.getX() + 12, panel.getY() + 8,
+    g.drawText ("RIGHT-HAND GESTURES", panel.getX() + 12, panel.getY() + 8,
                 panel.getWidth() - 24, 18, juce::Justification::centredLeft);
 
     g.setColour (kSecondary);
     g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-    g.drawText ("DRAG A GESTURE ONTO A PARAMETER ROW",
+    g.drawText ("DRAG ONE DIRECTLY ONTO A PARAMETER ROW BELOW",
                 panel.getX() + 12, panel.getY() + 26,
                 panel.getWidth() - 24, 16, juce::Justification::centredLeft);
 
