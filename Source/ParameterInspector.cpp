@@ -39,15 +39,24 @@ public:
 
         const auto& parameter = owner.parameters[static_cast<size_t> (row)];
         auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (8, 2);
+        const auto isDropTarget = row == owner.gestureDropPreviewRow
+                               && owner.gestureDropPreview != ControlGesture::unknown;
 
-        if (selected)
+        if (isDropTarget)
+        {
+            g.setColour ((parameter.automatable ? kGreen : kRed).withAlpha (0.14f));
+            g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
+            g.setColour (parameter.automatable ? kGreen : kRed);
+            g.drawRoundedRectangle (bounds.toFloat(), 6.0f, 1.5f);
+        }
+        else if (selected)
         {
             g.setColour (kBlue.withAlpha (0.14f));
             g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
         }
 
         const auto badges = owner.gestureBadgesForParameter (parameter);
-        auto badgeArea = bounds.removeFromRight (144);
+        auto badgeArea = bounds.removeFromRight (170);
         auto valueArea = bounds.removeFromRight (104);
 
         g.setColour (parameter.automatable ? kTitle : kSecondary);
@@ -61,7 +70,16 @@ public:
                             : juce::String (parameter.normalizedValue, 3),
                           valueArea, juce::Justification::centredRight, 1);
 
-        if (badges.isNotEmpty())
+        if (isDropTarget)
+        {
+            const auto label = parameter.automatable
+                ? controlGestureToEmoji (owner.gestureDropPreview) + "  RELEASE TO ASSIGN"
+                : juce::String ("NOT AUTOMATABLE");
+            g.setColour (parameter.automatable ? kGreen : kRed);
+            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawFittedText (label, badgeArea, juce::Justification::centredRight, 1);
+        }
+        else if (badges.isNotEmpty())
         {
             g.setColour (kAccent);
             g.setFont (juce::FontOptions (15.0f));
@@ -242,8 +260,37 @@ ParameterInspector::~ParameterInspector()
     mappingList.setModel (nullptr);
 }
 
+void ParameterInspector::setGestureDragPreview (ControlGesture gesture, juce::Point<int> localPoint)
+{
+    auto row = -1;
+    if (gesture != ControlGesture::unknown && parameterList.getBounds().contains (localPoint))
+    {
+        const auto point = parameterList.getLocalPoint (this, localPoint);
+        row = parameterList.getRowContainingPosition (point.x, point.y);
+        if (! juce::isPositiveAndBelow (row, static_cast<int> (parameters.size())))
+            row = -1;
+    }
+
+    if (row == gestureDropPreviewRow && gesture == gestureDropPreview)
+        return;
+
+    gestureDropPreviewRow = row;
+    gestureDropPreview = row >= 0 ? gesture : ControlGesture::unknown;
+    parameterList.repaint();
+}
+
+void ParameterInspector::clearGestureDragPreview()
+{
+    if (gestureDropPreviewRow < 0 && gestureDropPreview == ControlGesture::unknown)
+        return;
+    gestureDropPreviewRow = -1;
+    gestureDropPreview = ControlGesture::unknown;
+    parameterList.repaint();
+}
+
 bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint)
 {
+    clearGestureDragPreview();
     if (gesture == ControlGesture::unknown || ! parameterList.getBounds().contains (localPoint))
         return false;
 
@@ -309,6 +356,7 @@ void ParameterInspector::refreshData (bool forceRebuild)
     {
         selectedParameterRow = -1;
         parameterList.deselectAllRows();
+        clearGestureDragPreview();
     }
 
     if (selectedMappingRow >= static_cast<int> (mappings.size()))
@@ -538,16 +586,16 @@ void ParameterInspector::resized()
     if (! advancedExpanded)
     {
         parameterList.setBounds (bounds);
-        mappingList.setBounds ({ });
-        minSlider.setBounds ({ });
-        maxSlider.setBounds ({ });
-        smoothingSlider.setBounds ({ });
-        deadbandSlider.setBounds ({ });
-        invertButton.setBounds ({ });
-        mappingEnabledButton.setBounds ({ });
-        removeMappingButton.setBounds ({ });
-        livePresetButton.setBounds ({ });
-        smoothPresetButton.setBounds ({ });
+        mappingList.setBounds (juce::Rectangle<int>());
+        minSlider.setBounds (juce::Rectangle<int>());
+        maxSlider.setBounds (juce::Rectangle<int>());
+        smoothingSlider.setBounds (juce::Rectangle<int>());
+        deadbandSlider.setBounds (juce::Rectangle<int>());
+        invertButton.setBounds (juce::Rectangle<int>());
+        mappingEnabledButton.setBounds (juce::Rectangle<int>());
+        removeMappingButton.setBounds (juce::Rectangle<int>());
+        livePresetButton.setBounds (juce::Rectangle<int>());
+        smoothPresetButton.setBounds (juce::Rectangle<int>());
         return;
     }
 
