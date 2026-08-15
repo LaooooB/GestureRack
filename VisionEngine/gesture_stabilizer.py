@@ -43,9 +43,15 @@ class GestureStabilizer:
     release_thresholds: dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_RELEASE_THRESHOLDS)
     )
+    # Weak-but-correct classes often flicker to None for one MediaPipe callback.
+    # Do not throw away an otherwise-consistent activation candidate for a tiny
+    # confidence dip; keep the candidate clock alive for this short grace period.
+    # A different valid gesture still replaces the candidate immediately.
+    candidate_grace_ms: int = 90
     stable: str = "None"
     candidate: str = "None"
     candidate_since_ms: int = 0
+    candidate_last_valid_ms: int = 0
     invalid_since_ms: int = 0
 
     def _activate_threshold(self, gesture: str) -> float:
@@ -54,6 +60,15 @@ class GestureStabilizer:
     def _release_threshold(self, gesture: str) -> float:
         activate = self._activate_threshold(gesture)
         return float(self.release_thresholds.get(gesture, max(0.0, activate - 0.12)))
+
+    def _update_stable_release(self, now_ms: int) -> None:
+        if self.stable == "None":
+            return
+        if self.invalid_since_ms == 0:
+            self.invalid_since_ms = now_ms
+        elif now_ms - self.invalid_since_ms >= self.release_ms:
+            self.stable = "None"
+            self.invalid_since_ms = 0
 
     def update(self, raw: str, confidence: float, now_ms: int) -> str:
         raw_allowed = raw in self.allowed_gestures
@@ -65,6 +80,7 @@ class GestureStabilizer:
             if confidence >= self._release_threshold(self.stable):
                 self.candidate = raw
                 self.candidate_since_ms = 0
+                self.candidate_last_valid_ms = now_ms
                 self.invalid_since_ms = 0
                 return self.stable
 
@@ -72,22 +88,33 @@ class GestureStabilizer:
             raw_allowed and confidence >= self._activate_threshold(raw)
         )
         if not valid_for_activation:
+            # Preserve a pending candidate across a very short confidence dip.
+            # This specifically helps Open Palm / Thumb / Point poses where one
+            # frame may fall below the threshold even though the physical hand did
+            # not change. The grace is deliberately shorter than a normal human
+            # gesture transition and never masks a different *valid* gesture.
+            candidate_in_grace = (
+                self.candidate != "None"
+                and self.candidate_last_valid_ms > 0
+                and now_ms - self.candidate_last_valid_ms <= self.candidate_grace_ms
+            )
+            self._update_stable_release(now_ms)
+            if candidate_in_grace:
+                return self.stable
+
             self.candidate = "None"
             self.candidate_since_ms = 0
-            if self.stable != "None":
-                if self.invalid_since_ms == 0:
-                    self.invalid_since_ms = now_ms
-                elif now_ms - self.invalid_since_ms >= self.release_ms:
-                    self.stable = "None"
-                    self.invalid_since_ms = 0
+            self.candidate_last_valid_ms = 0
             return self.stable
 
         self.invalid_since_ms = 0
         if raw != self.candidate:
             self.candidate = raw
             self.candidate_since_ms = now_ms
+            self.candidate_last_valid_ms = now_ms
             return self.stable
 
+        self.candidate_last_valid_ms = now_ms
         if self.candidate_since_ms and now_ms - self.candidate_since_ms >= self.hold_ms:
             self.stable = raw
             self.candidate_since_ms = 0
@@ -98,4 +125,5 @@ class GestureStabilizer:
         self.stable = "None"
         self.candidate = "None"
         self.candidate_since_ms = 0
+        self.candidate_last_valid_ms = 0
         self.invalid_since_ms = 0
