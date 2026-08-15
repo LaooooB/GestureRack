@@ -115,35 +115,6 @@ def validate_dataset_quality(y: np.ndarray, groups: np.ndarray,
     return summary
 
 
-def choose_group_split(x: np.ndarray, y: np.ndarray, groups: np.ndarray,
-                       test_size: float, random_state: int):
-    from sklearn.model_selection import GroupShuffleSplit
-
-    unique_groups = np.unique(groups)
-    if len(unique_groups) < 2:
-        raise ValueError(
-            "need at least two independent recording sessions; frame-level random split is forbidden")
-    all_labels = set(y.tolist())
-
-    # Search deterministic seeds for a held-out group split containing every
-    # class on both sides. This makes per-class metrics meaningful and avoids an
-    # accidentally easy test set that simply omits a difficult gesture.
-    for offset in range(100):
-        splitter = GroupShuffleSplit(
-            n_splits=1,
-            test_size=test_size,
-            random_state=random_state + offset,
-        )
-        train_indices, test_indices = next(splitter.split(x, y, groups))
-        if (set(y[train_indices].tolist()) == all_labels
-                and set(y[test_indices].tolist()) == all_labels):
-            return train_indices, test_indices
-
-    raise ValueError(
-        "could not create a session-held-out split containing every class; "
-        "record more independent sessions for each gesture")
-
-
 def balance_training_set(x: np.ndarray, y: np.ndarray, random_state: int):
     rng = np.random.default_rng(random_state)
     labels, counts = np.unique(y, return_counts=True)
@@ -192,10 +163,84 @@ def metrics_dict(y_true: np.ndarray, y_pred: np.ndarray, labels: list[str]) -> d
     }
 
 
-def train(args) -> dict:
+def fit_model(x: np.ndarray, y: np.ndarray, args, random_state: int):
     from sklearn.neural_network import MLPClassifier
     from sklearn.preprocessing import StandardScaler
 
+    balanced_x, balanced_y = balance_training_set(x, y, random_state)
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(balanced_x)
+    classifier = MLPClassifier(
+        hidden_layer_sizes=(args.hidden,),
+        activation="relu",
+        solver="adam",
+        alpha=args.alpha,
+        batch_size=min(args.batch_size, len(scaled)),
+        learning_rate_init=args.learning_rate,
+        max_iter=args.max_iter,
+        random_state=random_state,
+        early_stopping=False,
+    )
+    classifier.fit(scaled, balanced_y)
+    return scaler, classifier
+
+
+def grouped_out_of_fold_evaluation(x: np.ndarray, y: np.ndarray, groups: np.ndarray,
+                                   heuristic_predictions: np.ndarray, labels: list[str], args):
+    from sklearn.model_selection import GroupKFold
+
+    unique_groups = np.unique(groups)
+    if len(unique_groups) < 2:
+        raise ValueError("need at least two independent recording groups")
+
+    n_splits = min(int(args.max_folds), len(unique_groups))
+    if n_splits < 2:
+        raise ValueError("grouped evaluation requires at least two folds")
+
+    splitter = GroupKFold(n_splits=n_splits)
+    oof_predictions = np.empty(len(y), dtype=object)
+    covered = np.zeros(len(y), dtype=bool)
+    fold_reports: list[dict] = []
+
+    for fold_index, (train_indices, test_indices) in enumerate(
+            splitter.split(x, y, groups), start=1):
+        train_labels = set(y[train_indices].tolist())
+        if train_labels != set(labels):
+            missing = sorted(set(labels) - train_labels)
+            raise ValueError(
+                f"fold {fold_index} training side is missing classes: {', '.join(missing)}. "
+                "Record complete guided capture groups so every fold can learn every gesture."
+            )
+
+        scaler, classifier = fit_model(
+            x[train_indices], y[train_indices], args, args.random_state + fold_index)
+        predictions = classifier.predict(scaler.transform(x[test_indices]))
+        oof_predictions[test_indices] = predictions
+        covered[test_indices] = True
+
+        fold_reports.append({
+            "fold": fold_index,
+            "train_groups": sorted(np.unique(groups[train_indices]).tolist()),
+            "test_groups": sorted(np.unique(groups[test_indices]).tolist()),
+            "tiny_model": metrics_dict(y[test_indices], predictions, labels),
+            "heuristic_baseline": metrics_dict(
+                y[test_indices], heuristic_predictions[test_indices], labels),
+        })
+
+    if not bool(np.all(covered)):
+        raise RuntimeError("grouped evaluation did not produce an out-of-fold prediction for every sample")
+
+    oof = np.asarray(oof_predictions, dtype=str)
+    return {
+        "method": "GroupKFold out-of-fold",
+        "fold_count": n_splits,
+        "folds": fold_reports,
+        "tiny_model": metrics_dict(y, oof, labels),
+        "heuristic_baseline": metrics_dict(y, heuristic_predictions, labels),
+    }
+
+
+def train(args) -> dict:
     x, y, groups, heuristic_predictions = load_records(args.datasets)
     quality = validate_dataset_quality(
         y,
@@ -204,40 +249,11 @@ def train(args) -> dict:
         min_groups_per_class=args.min_groups_per_class,
     )
     labels = list(RIGHT_DATASET_LABELS)
-    train_indices, test_indices = choose_group_split(
-        x, y, groups, args.test_size, args.random_state)
 
-    x_train = x[train_indices]
-    y_train = y[train_indices]
-    x_test = x[test_indices]
-    y_test = y[test_indices]
-
-    x_train, y_train = balance_training_set(x_train, y_train, args.random_state)
-
-    scaler = StandardScaler()
-    x_train_scaled = scaler.fit_transform(x_train)
-    x_test_scaled = scaler.transform(x_test)
-
-    classifier = MLPClassifier(
-        hidden_layer_sizes=(args.hidden,),
-        activation="relu",
-        solver="adam",
-        alpha=args.alpha,
-        batch_size=min(args.batch_size, len(x_train_scaled)),
-        learning_rate_init=args.learning_rate,
-        max_iter=args.max_iter,
-        random_state=args.random_state,
-        early_stopping=False,
-    )
-    classifier.fit(x_train_scaled, y_train)
-
-    predictions = classifier.predict(x_test_scaled)
-    tiny_metrics = metrics_dict(y_test, predictions, labels)
-    baseline_metrics = metrics_dict(
-        y_test,
-        heuristic_predictions[test_indices],
-        labels,
-    )
+    evaluation = grouped_out_of_fold_evaluation(
+        x, y, groups, heuristic_predictions, labels, args)
+    tiny_metrics = evaluation["tiny_model"]
+    baseline_metrics = evaluation["heuristic_baseline"]
 
     min_tiny_recall = min(
         tiny_metrics["per_class"][label]["recall"] for label in labels
@@ -247,23 +263,25 @@ def train(args) -> dict:
         and min_tiny_recall >= args.min_class_recall
     )
 
-    # scikit-learn exposes dense MLP weights as coefs_ and intercepts_. Export
-    # only those arrays plus StandardScaler statistics so production inference
-    # remains pure NumPy and carries no training dependency.
-    if len(classifier.coefs_) != 2 or len(classifier.intercepts_) != 2:
+    # After unbiased grouped out-of-fold evaluation, fit the shipped shadow
+    # candidate on all approved data. This avoids wasting the held-out frames in
+    # the final candidate while keeping promotion metrics strictly out-of-fold.
+    final_scaler, final_classifier = fit_model(x, y, args, args.random_state)
+
+    if len(final_classifier.coefs_) != 2 or len(final_classifier.intercepts_) != 2:
         raise RuntimeError("trainer expected exactly one hidden layer")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         args.output,
-        labels=np.asarray(classifier.classes_),
+        labels=np.asarray(final_classifier.classes_),
         feature_version=np.asarray([FEATURE_VERSION], dtype=np.int32),
-        mean=np.asarray(scaler.mean_, dtype=np.float32),
-        scale=np.asarray(scaler.scale_, dtype=np.float32),
-        w1=np.asarray(classifier.coefs_[0], dtype=np.float32),
-        b1=np.asarray(classifier.intercepts_[0], dtype=np.float32),
-        w2=np.asarray(classifier.coefs_[1], dtype=np.float32),
-        b2=np.asarray(classifier.intercepts_[1], dtype=np.float32),
+        mean=np.asarray(final_scaler.mean_, dtype=np.float32),
+        scale=np.asarray(final_scaler.scale_, dtype=np.float32),
+        w1=np.asarray(final_classifier.coefs_[0], dtype=np.float32),
+        b1=np.asarray(final_classifier.intercepts_[0], dtype=np.float32),
+        w2=np.asarray(final_classifier.coefs_[1], dtype=np.float32),
+        b2=np.asarray(final_classifier.intercepts_[1], dtype=np.float32),
     )
 
     report = {
@@ -273,8 +291,8 @@ def train(args) -> dict:
         "samples": int(len(x)),
         "label_counts": dict(Counter(y.tolist())),
         "dataset_quality": quality,
-        "train_sessions": sorted(np.unique(groups[train_indices]).tolist()),
-        "test_sessions": sorted(np.unique(groups[test_indices]).tolist()),
+        "recording_groups": sorted(np.unique(groups).tolist()),
+        "evaluation": evaluation,
         "tiny_model": tiny_metrics,
         "heuristic_baseline": baseline_metrics,
         "promotion_gate": {
@@ -299,13 +317,14 @@ def main() -> None:
                         help="JSONL files recorded by GestureDatasetRecorder or collect_gesture_session.py")
     parser.add_argument("--output", type=Path,
                         default=Path("models/right_gesture_landmark_v1.npz"))
-    parser.add_argument("--test-size", type=float, default=0.25)
     parser.add_argument("--hidden", type=int, default=32)
     parser.add_argument("--alpha", type=float, default=0.001)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--max-iter", type=int, default=500)
     parser.add_argument("--random-state", type=int, default=41)
+    parser.add_argument("--max-folds", type=int, default=5,
+                        help="Maximum GroupKFold count for out-of-fold promotion metrics")
     parser.add_argument("--min-samples-per-class", type=int, default=80,
                         help="Refuse training when any gesture has fewer independent frame samples")
     parser.add_argument("--min-groups-per-class", type=int, default=2,
@@ -313,13 +332,13 @@ def main() -> None:
     parser.add_argument("--min-macro-improvement", type=float, default=0.02,
                         help="Shadow model must beat held-out heuristic macro-F1 by this amount")
     parser.add_argument("--min-class-recall", type=float, default=0.90,
-                        help="Every held-out class must meet this recall before promotion")
+                        help="Every out-of-fold class must meet this recall before promotion")
     args = parser.parse_args()
 
-    if not 0.05 <= args.test_size <= 0.5:
-        parser.error("--test-size must be between 0.05 and 0.5")
     if not 1 <= args.hidden <= 128:
         parser.error("--hidden must be in 1..128")
+    if args.max_folds < 2:
+        parser.error("--max-folds must be at least 2")
     if args.min_samples_per_class < 1:
         parser.error("--min-samples-per-class must be positive")
     if args.min_groups_per_class < 2:
@@ -330,7 +349,9 @@ def main() -> None:
     print(json.dumps({
         "model": report["model"],
         "samples": report["samples"],
-        "groups": len(report["dataset_quality"]["groups"]),
+        "groups": len(report["recording_groups"]),
+        "evaluation": report["evaluation"]["method"],
+        "folds": report["evaluation"]["fold_count"],
         "tiny_macro_f1": report["tiny_model"]["macro_f1"],
         "heuristic_macro_f1": report["heuristic_baseline"]["macro_f1"],
         "promotion_eligible": gate["eligible"],
