@@ -115,7 +115,7 @@ def main() -> None:
                     "physical_role": "right",
                     "session_id": session_id,
                     "camera": {
-                        "index": 0,
+                        "index": int(telemetry.get("camera_index", 0) or 0),
                         "backend": telemetry.get("backend", ""),
                         "width": telemetry.get("width", 0),
                         "height": telemetry.get("height", 0),
@@ -124,10 +124,10 @@ def main() -> None:
                         "label": "resolved-right",
                         "confidence": float(right.get("handedness_confidence", 0.0)),
                     },
-                    # The multicast stream contains the production heuristic result,
-                    # not the original MediaPipe canned head. Training only requires
-                    # features/label and uses heuristic here as the current baseline.
-                    "canned": {"gesture": "Unavailable", "confidence": 0.0},
+                    "canned": {
+                        "gesture": str(right.get("canned_gesture", "Unavailable")),
+                        "confidence": float(right.get("canned_confidence", 0.0)),
+                    },
                     "heuristic": {
                         "gesture": str(right.get("raw_gesture", "None")),
                         "confidence": float(right.get("confidence", 0.0)),
