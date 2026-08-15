@@ -306,8 +306,10 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
         return false;
     }
 
+    const auto parameterIndex = parameter.index;
+    const auto parameterName = parameter.name;
     juce::String error;
-    const auto ok = processor.addParameterGestureMapping (parameter.index, gesture, error);
+    const auto ok = processor.addParameterGestureMapping (parameterIndex, gesture, error);
     if (! ok)
     {
         statusLabel.setText (error.isNotEmpty() ? error : "ASSIGNMENT FAILED", juce::dontSendNotification);
@@ -324,7 +326,7 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
             mappingList.selectRow (selectedMappingRow, false, true);
         loadSelectedMappingControls();
     }
-    statusLabel.setText (controlGestureToEmoji (gesture) + "  \xE2\x86\x92  " + parameter.name
+    statusLabel.setText (controlGestureToEmoji (gesture) + "  \xE2\x86\x92  " + parameterName
                          + "  ASSIGNED  —  HOLD THE GESTURE + MOVE RIGHT HAND UP / DOWN",
                          juce::dontSendNotification);
     repaint();
