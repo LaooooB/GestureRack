@@ -21,6 +21,8 @@ public:
     // Primary product interaction: drag a gesture from the single gesture palette
     // in PluginEditor and drop it directly on an automatable parameter row.
     bool dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint);
+    void setGestureDragPreview (ControlGesture gesture, juce::Point<int> localPoint);
+    void clearGestureDragPreview();
 
 private:
     class ParameterListModel;
@@ -65,6 +67,8 @@ private:
     std::vector<GestureBinding> mappings;
     int selectedParameterRow = -1;
     int selectedMappingRow = -1;
+    int gestureDropPreviewRow = -1;
+    ControlGesture gestureDropPreview = ControlGesture::unknown;
     int lastSlot = -1;
     juce::String lastPluginName;
     bool advancedExpanded = false;
