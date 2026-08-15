@@ -90,10 +90,9 @@ class RightHandCalibrationTests(unittest.TestCase):
         calibration.start(6000)
         calibration.observe([hand("Right")], 6010)
         calibration.observe([hand("Left")], 6050)
-        calibration.observe([hand("Right")], 6110)
+        self.assertIsNone(calibration.observe([hand("Right")], 6110))
         self.assertTrue(calibration.active)
-        self.assertIsNone(calibration.observe([hand("Right")], 6150))
-        result = calibration.observe([hand("Right")], 6190)
+        result = calibration.observe([hand("Right")], 6150)
         self.assertIsNotNone(result)
         assert result is not None
         self.assertFalse(result.swap_handedness)
