@@ -42,22 +42,62 @@ class RightHandCalibrationTests(unittest.TestCase):
         self.assertTrue(result.swap_handedness)
         self.assertIn("SWAPPED", result.status)
 
-    def test_two_hands_are_not_used_for_known_right_calibration(self) -> None:
-        calibration = RightHandCalibration(duration_ms=100, min_samples=1)
+    def test_click_to_first_valid_hand_delay_does_not_consume_sampling_window(self) -> None:
+        calibration = RightHandCalibration(duration_ms=100, min_samples=2, overall_timeout_ms=1000)
         calibration.start(3000)
-        result = calibration.observe([hand("Left"), hand("Right")], 3110)
+        self.assertIsNone(calibration.observe([], 3200))
+        self.assertIsNone(calibration.observe([hand("Right"), hand("Left")], 3400))
+        self.assertEqual(calibration.sample_count, 0)
+        self.assertIsNone(calibration.observe([hand("Right")], 3500))
+        self.assertIsNone(calibration.observe([hand("Right")], 3550))
+        result = calibration.observe([hand("Right")], 3600)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(result.swap_handedness)
+
+    def test_two_hands_are_ignored_until_overall_timeout(self) -> None:
+        calibration = RightHandCalibration(
+            duration_ms=100, min_samples=1, overall_timeout_ms=200)
+        calibration.start(4000)
+        self.assertIsNone(calibration.observe([hand("Left"), hand("Right")], 4110))
+        result = calibration.observe([hand("Left"), hand("Right")], 4200)
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIsNone(result.swap_handedness)
         self.assertEqual(result.sample_count, 0)
 
-    def test_low_confidence_samples_are_ignored(self) -> None:
-        calibration = RightHandCalibration(duration_ms=100, min_samples=1, min_confidence=0.8)
-        calibration.start(4000)
-        result = calibration.observe([hand("Left", 0.4)], 4110)
+    def test_low_confidence_samples_are_ignored_until_timeout(self) -> None:
+        calibration = RightHandCalibration(
+            duration_ms=100,
+            min_samples=1,
+            min_confidence=0.8,
+            overall_timeout_ms=200,
+        )
+        calibration.start(5000)
+        self.assertIsNone(calibration.observe([hand("Left", 0.4)], 5110))
+        result = calibration.observe([hand("Left", 0.4)], 5200)
         self.assertIsNotNone(result)
         assert result is not None
         self.assertIsNone(result.swap_handedness)
+
+    def test_ambiguous_votes_continue_collecting_until_consensus(self) -> None:
+        calibration = RightHandCalibration(
+            duration_ms=100,
+            min_samples=3,
+            consensus_ratio=0.72,
+            overall_timeout_ms=1000,
+        )
+        calibration.start(6000)
+        calibration.observe([hand("Right")], 6010)
+        calibration.observe([hand("Left")], 6050)
+        calibration.observe([hand("Right")], 6110)
+        self.assertTrue(calibration.active)
+        self.assertIsNone(calibration.observe([hand("Right")], 6150))
+        result = calibration.observe([hand("Right")], 6190)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(result.swap_handedness)
+        self.assertGreaterEqual(result.confidence, 0.72)
 
 
 class VisionProfileStoreTests(unittest.TestCase):
