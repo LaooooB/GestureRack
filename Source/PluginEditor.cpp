@@ -23,6 +23,20 @@ const juce::Colour kBlue      { 80, 140, 220 };
 const juce::Colour kGreen     { 92, 180, 120 };
 const juce::Colour kRed       { 215, 80, 80 };
 const juce::Colour kCameraBg  { 30, 33, 39 };
+
+bool handRolesTrusted (const gr::DualHandVisionSnapshot& snapshot)
+{
+    if (snapshot.protocol < 2)
+        return true;
+    if (snapshot.handCalibrationActive)
+        return false;
+
+    const auto source = snapshot.handRoleSource.trim().toUpperCase();
+    return source.isNotEmpty()
+        && source != "UNCALIBRATED"
+        && source != "CALIBRATING"
+        && source != "DEFAULT";
+}
 }
 
 GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAudioProcessor& p)
@@ -102,13 +116,14 @@ void GestureRackAudioProcessorEditor::timerCallback()
     const auto bypassed = processor.isSlotBypassed (selected);
     const auto vision = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
+    const auto rolesTrusted = handRolesTrusted (vision);
 
     frameReader.readLatest (cameraFrame);
 
     enableButton.setButtonText (processor.isGestureEnabled() ? "GESTURE ON" : "GESTURE OFF");
     bypassButton.setButtonText (bypassed ? "BYPASSED" : "ACTIVE");
     calibrateHandsButton.setButtonText (vision.handCalibrationActive ? "SHOW RIGHT HAND..."
-                                                                      : "CALIBRATE RIGHT");
+                                        : (rolesTrusted ? "RECALIBRATE RIGHT" : "CALIBRATE RIGHT"));
     swapHandsButton.setButtonText (vision.swapHandedness ? "L/R SWAPPED" : "SWAP L/R");
 
     openButton.setEnabled (loaded);
@@ -116,6 +131,11 @@ void GestureRackAudioProcessorEditor::timerCallback()
     bypassButton.setEnabled (loaded);
     calibrateHandsButton.setEnabled (connected && ! vision.handCalibrationActive);
     swapHandsButton.setEnabled (connected && ! vision.handCalibrationActive);
+
+    calibrateHandsButton.setColour (juce::TextButton::buttonColourId,
+                                    connected && ! rolesTrusted ? kAccent.withAlpha (0.28f)
+                                                                : juce::Colour (255, 255, 255));
+    calibrateHandsButton.setColour (juce::TextButton::textColourOffId, kTitle);
 
     updateSlotButtons();
     repaint();
@@ -372,19 +392,23 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     const auto snapshot = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
-    const auto rightEmoji = snapshot.right.present
+    const auto rolesTrusted = handRolesTrusted (snapshot);
+    const auto rightEmoji = rolesTrusted && snapshot.right.present
         ? gr::controlGestureToEmoji (snapshot.right.stableGesture)
         : juce::String ("--");
-    const auto leftText = snapshot.left.present && snapshot.left.stableSlot > 0
+    const auto leftText = rolesTrusted && snapshot.left.present && snapshot.left.stableSlot > 0
         ? juce::String (snapshot.left.stableSlot) : juce::String ("--");
 
     juce::String health;
     if (connected)
     {
+        const auto roleHealth = rolesTrusted
+            ? (snapshot.swapHandedness ? juce::String ("L/R SWAP") : juce::String ("L/R OK"))
+            : juce::String ("L/R CALIBRATE");
         health = juce::String (snapshot.captureFps, 0) + "fps"
                + "  fa" + juce::String (snapshot.frameAgeAtSubmitMs, 0)
                + "/" + juce::String (snapshot.captureToResultMs, 0) + "ms"
-               + "  |  " + (snapshot.swapHandedness ? juce::String ("L/R SWAP") : juce::String ("L/R OK"))
+               + "  |  " + roleHealth
                + "  |  L" + leftText + "  " + rightEmoji;
         if (snapshot.shadowModelLoaded && snapshot.shadowSamples > 0)
             health += "  |  SH " + juce::String (snapshot.shadowAgreementRate * 100.0f, 0)
@@ -395,7 +419,7 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
         health = "VISION OFFLINE";
     }
 
-    g.setColour (connected ? kGreen : kRed);
+    g.setColour (! connected ? kRed : (rolesTrusted ? kGreen : kAccent));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     g.drawFittedText (health, 300, 14, getWidth() - 324, 32,
                       juce::Justification::centredRight, 1);
@@ -452,19 +476,23 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
         g.fillRoundedRectangle (leftBadge.toFloat(), 5.0f);
         g.setColour (juce::Colours::white);
         g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-        const auto leftLabel = snapshot.left.present
-            ? "LEFT  SLOT " + juce::String (snapshot.left.stableSlot)
-            : juce::String ("LEFT  --");
-        g.drawText (leftLabel, leftBadge, juce::Justification::centred);
+        const auto leftLabel = ! rolesTrusted
+            ? juce::String ("ROLE UNVERIFIED")
+            : (snapshot.left.present
+                ? "LEFT  SLOT " + juce::String (snapshot.left.stableSlot)
+                : juce::String ("LEFT  --"));
+        g.drawFittedText (leftLabel, leftBadge, juce::Justification::centred, 1);
 
         const auto rightWidth = juce::jmin (176, badge.getWidth());
         auto rightBadge = badge.removeFromRight (rightWidth);
         g.setColour (juce::Colour (0, 0, 0).withAlpha (0.58f));
         g.fillRoundedRectangle (rightBadge.toFloat(), 5.0f);
         g.setColour (juce::Colours::white);
-        const auto rightLabel = snapshot.right.present
-            ? "RIGHT  " + gr::controlGestureToString (snapshot.right.stableGesture).toUpperCase()
-            : juce::String ("RIGHT  --");
+        const auto rightLabel = ! rolesTrusted
+            ? juce::String ("CALIBRATE RIGHT")
+            : (snapshot.right.present
+                ? "RIGHT  " + gr::controlGestureToString (snapshot.right.stableGesture).toUpperCase()
+                : juce::String ("RIGHT  --"));
         g.drawFittedText (rightLabel, rightBadge, juce::Justification::centred, 1);
     }
     else
@@ -475,12 +503,16 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
                     previewArea, juce::Justification::centred);
     }
 
-    g.setColour (snapshot.handCalibrationActive ? kAccent : kSecondary);
+    g.setColour (snapshot.handCalibrationActive || ! rolesTrusted ? kAccent : kSecondary);
     g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-    auto roleText = snapshot.handCalibrationActive
-        ? snapshot.handCalibrationStatus + "  " + juce::String (snapshot.handCalibrationSamples)
-        : (snapshot.swapHandedness ? juce::String ("HANDS: SWAPPED") : juce::String ("HANDS: NORMAL"));
-    if (! snapshot.handRoleSource.isEmpty() && ! snapshot.handCalibrationActive)
+    juce::String roleText;
+    if (snapshot.handCalibrationActive)
+        roleText = snapshot.handCalibrationStatus + "  " + juce::String (snapshot.handCalibrationSamples);
+    else if (! rolesTrusted)
+        roleText = "HAND CONTROL LOCKED  /  CALIBRATE PHYSICAL RIGHT HAND";
+    else
+        roleText = snapshot.swapHandedness ? "HANDS: SWAPPED" : "HANDS: NORMAL";
+    if (rolesTrusted && ! snapshot.handRoleSource.isEmpty() && ! snapshot.handCalibrationActive)
         roleText += "  /  " + snapshot.handRoleSource;
     g.drawFittedText (roleText, infoArea.removeFromTop (20), juce::Justification::centredLeft, 1);
 
