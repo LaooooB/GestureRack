@@ -8,7 +8,7 @@ The shipping control path remains:
 
 `MediaPipe landmarks/handedness -> physical role resolver -> role-specific classifier -> per-class hysteresis`
 
-A learned landmark classifier must **not** replace the current heuristic/canned fusion merely because it trains successfully. It is promoted only after session-held-out measurements show a real accuracy improvement without adding material latency.
+A learned landmark classifier must **not** replace the current heuristic/canned fusion merely because it trains successfully. It is promoted only after grouped out-of-fold measurements show a real accuracy improvement without adding material latency.
 
 Physical role is resolved **before** gesture classification. Gesture shape is never allowed to decide whether a detection is the selector hand or the controller hand. Therefore the same two-finger pose is `Slot 2` on physical LEFT and `Victory` on physical RIGHT.
 
@@ -27,25 +27,30 @@ Palm-local coordinates remove translation and scale and tolerate hand rotation. 
 
 Changing feature layout requires a new `FEATURE_VERSION`. Old models must fail closed instead of silently consuming incompatible features.
 
-## Data collection
+## Preferred data collection
 
-1. Start the normal VisionEngine and plugin.
+1. Start the normal `GestureVisionEngine` and plugin.
 2. Use `CALIBRATE RIGHT` in the plugin. Do not record with uncalibrated physical roles.
-3. Install the runtime Python requirements plus NumPy.
-4. From `VisionEngine/`, record each ground-truth class while the production sidecar is running:
+3. Run the guided collector:
 
 ```text
-python collect_runtime_dataset.py Open_Palm --seconds 8
-python collect_runtime_dataset.py Closed_Fist --seconds 8
-python collect_runtime_dataset.py Victory --seconds 8
-python collect_runtime_dataset.py Thumb_Up --seconds 8
-python collect_runtime_dataset.py Thumb_Down --seconds 8
-python collect_runtime_dataset.py Point_Right --seconds 8
-python collect_runtime_dataset.py Point_Left --seconds 8
-python collect_runtime_dataset.py None --seconds 8
+python collect_gesture_session.py
 ```
 
-`None` is the hard-negative class. Record realistic non-command poses, transitions, partially formed gestures, hands near the edge of frame, and confusing shapes.
+The Windows release package also contains `GestureDataCollector.exe`, so target-machine data can be captured without installing Python.
+
+One collector run records all required physical-right classes into one explicit `recording_group`:
+
+- `None` hard negatives
+- `Open_Palm`
+- `Closed_Fist`
+- `Victory`
+- `Thumb_Up`
+- `Thumb_Down`
+- `Point_Right`
+- `Point_Left`
+
+`None` is not "no hand". Keep the right hand visible and record realistic non-command poses, transitions, half-formed gestures, relaxed hands, edge-of-frame poses, and shapes that are easy to confuse with a real command.
 
 During every class, deliberately vary:
 
@@ -57,11 +62,30 @@ During every class, deliberately vary:
 - bright/dim lighting
 - background complexity
 
-Repeat the full set across multiple independent VisionEngine sessions. A new sidecar session is a new evaluation group.
+Run at least two complete guided capture groups under meaningfully different conditions. Three or more groups are preferred before considering production promotion.
 
-### No frame-random validation
+### Legacy single-class collection
 
-Adjacent video frames are near duplicates. Randomly splitting individual frames between train and test produces misleadingly high accuracy. The trainer therefore holds out complete sidecar sessions with `GroupShuffleSplit` and refuses to train a promotion report when every class cannot appear on both sides.
+`collect_runtime_dataset.py <Label>` remains available for targeted hard-negative or failure-case capture, but full guided groups are preferred for promotion evaluation because each group contains all eight classes.
+
+## No frame-random validation
+
+Adjacent video frames are near duplicates. Randomly splitting individual frames between train and test produces misleadingly high accuracy.
+
+The trainer therefore uses explicit recording groups and `GroupKFold` out-of-fold evaluation. Every sample is predicted by a model that was trained without that sample's recording group. The promotion metrics are computed from those out-of-fold predictions across the complete dataset.
+
+After evaluation, the exported shadow candidate is retrained on all approved data. This means no data is wasted in the final candidate, while the reported promotion metrics remain unbiased by group leakage.
+
+## Dataset quality gate
+
+Training refuses to produce a promotion report unless:
+
+- all seven control gestures are present
+- the `None` hard-negative class is present
+- every class meets the minimum sample count
+- every class appears in at least two independent recording groups
+
+Current defaults are 80 samples per class and two groups per class. These are minimum engineering gates, not a claim that two groups are enough for a commercial production model.
 
 ## Offline training
 
@@ -90,12 +114,14 @@ The shipping inference implementation in `tiny_landmark_classifier.py` is pure N
 
 ## Promotion gate
 
-The generated `.report.json` compares the tiny model against the current heuristic classifier on the **same held-out sessions**.
+The generated `.report.json` compares the tiny model against the current heuristic classifier on the **same grouped out-of-fold samples**.
 
 Default minimum gate:
 
 - tiny-model macro F1 must exceed heuristic macro F1 by at least 0.02
-- every held-out class recall must be at least 0.90
+- every out-of-fold class recall must be at least 0.90
+
+The report also contains per-fold train/test recording groups, confusion matrices, per-class precision/recall/F1, and the aggregate heuristic baseline.
 
 Passing this gate does not immediately replace production classification. The next phase is sidecar shadow mode: run both classifiers, transmit/log disagreements, and measure inference cost. Only after live shadow results are clean should the tiny classifier become authoritative.
 
