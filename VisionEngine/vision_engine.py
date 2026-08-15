@@ -99,6 +99,8 @@ def empty_right_packet(stable_gesture: str = "None") -> dict:
     return {
         "present": False,
         "handedness_confidence": 0.0,
+        "canned_gesture": "None",
+        "canned_confidence": 0.0,
         "raw_gesture": "None",
         "stable_gesture": stable_gesture,
         "confidence": 0.0,
@@ -139,6 +141,8 @@ class GestureVisionEngine:
         self.role_config_source = "DEFAULT"
         self.role_lock = threading.Lock()
         self.hand_calibration = RightHandCalibration()
+        self._pre_calibration_role_source = "DEFAULT"
+        self._pre_calibration_swap = bool(swap_handedness)
 
         self.right_stabilizer = GestureStabilizer(
             allowed_gestures=set(ALLOWED_RIGHT_GESTURES),
@@ -319,6 +323,19 @@ class GestureVisionEngine:
             except OSError as exc:
                 print(f"Could not persist handedness profile: {exc}")
 
+    def _begin_hand_calibration_locked(self, now_ms: int) -> None:
+        if not self.hand_calibration.snapshot().active:
+            self._pre_calibration_role_source = self.role_config_source
+            self._pre_calibration_swap = bool(self.role_resolver.swap_handedness)
+        self.hand_calibration.start(now_ms)
+        self.role_config_source = "CALIBRATING"
+        self._reset_role_dependent_state_locked()
+
+    def _restore_pre_calibration_role_locked(self) -> None:
+        self.role_resolver.set_swap_handedness(self._pre_calibration_swap)
+        self.role_config_source = self._pre_calibration_role_source
+        self._reset_role_dependent_state_locked()
+
     def _load_role_profile(self) -> None:
         with self.role_lock:
             if self.swap_handedness_override is not None:
@@ -348,12 +365,12 @@ class GestureVisionEngine:
         now_ms = int(time.monotonic() * 1000)
         with self.role_lock:
             if name == "begin_hand_calibration":
-                self.hand_calibration.start(now_ms)
-                self.role_config_source = "CALIBRATING"
-                self._reset_role_dependent_state_locked()
+                self._begin_hand_calibration_locked(now_ms)
             elif name == "cancel_hand_calibration":
+                was_active = self.hand_calibration.snapshot().active
                 self.hand_calibration.cancel()
-                self.role_config_source = "MANUAL"
+                if was_active:
+                    self._restore_pre_calibration_role_locked()
             elif name == "set_swap_handedness":
                 self.hand_calibration.cancel()
                 self._set_swap_handedness_locked(
@@ -410,6 +427,7 @@ class GestureVisionEngine:
                 "frame_age_at_submit_ms": max(0.0, float(submit_ms - capture_ms)),
                 "inference_ms": max(0.0, float(result_ms - submit_ms)),
                 "capture_to_result_ms": max(0.0, float(result_ms - capture_ms)),
+                "camera_index": self.camera_index,
                 "backend": self.camera_backend,
                 "width": self.camera_width,
                 "height": self.camera_height,
@@ -422,9 +440,14 @@ class GestureVisionEngine:
         detections = self._extract_hands(result)
         with self.role_lock:
             calibration_result = self.hand_calibration.observe(detections, timestamp_ms)
-            if calibration_result is not None and calibration_result.swap_handedness is not None:
-                self._set_swap_handedness_locked(
-                    calibration_result.swap_handedness, "CALIBRATION", persist=True)
+            if calibration_result is not None:
+                if calibration_result.swap_handedness is not None:
+                    self._set_swap_handedness_locked(
+                        calibration_result.swap_handedness, "CALIBRATION", persist=True)
+                    self._pre_calibration_role_source = "CALIBRATION"
+                    self._pre_calibration_swap = bool(calibration_result.swap_handedness)
+                else:
+                    self._restore_pre_calibration_role_locked()
             left_hand, right_hand = self.role_resolver.resolve(detections, timestamp_ms)
             role_config = self._role_config_packet_locked()
 
@@ -462,6 +485,8 @@ class GestureVisionEngine:
             right_packet = {
                 "present": True,
                 "handedness_confidence": right_hand.handedness_confidence,
+                "canned_gesture": right_hand.raw_gesture,
+                "canned_confidence": right_hand.gesture_confidence,
                 "raw_gesture": classification.gesture,
                 "stable_gesture": stable,
                 "confidence": classification.confidence,
@@ -579,8 +604,7 @@ class GestureVisionEngine:
 
         if self.calibrate_right_on_start:
             with self.role_lock:
-                self.hand_calibration.start(int(time.monotonic() * 1000))
-                self.role_config_source = "CALIBRATING"
+                self._begin_hand_calibration_locked(int(time.monotonic() * 1000))
 
         self.stop_control.clear()
         control_thread = threading.Thread(
