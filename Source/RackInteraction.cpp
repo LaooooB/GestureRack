@@ -44,24 +44,29 @@ bool GestureRackAudioProcessor::moveSlot (int fromSlot, int toSlot)
     for (auto& generation : slotLoadGenerations)
         generation.fetch_add (1, std::memory_order_relaxed);
 
-    // Child editor windows are indexed by rack position, so close them before
-    // moving the hosted processors.
-    for (auto& window : childEditorWindows)
-        window.reset();
-
     // Move the complete PluginSlot object, rather than swapping just its graph
     // node. GestureBypassWrapper holds a reference to PluginSlot::requestedBypass;
     // keeping those objects together preserves bypass control after reordering.
+    // Child editor windows are rotated in the exact same order. unique_ptr::swap
+    // does not destroy the forward-declared ChildEditorWindow type in this TU.
     auto moved = std::move (slots[static_cast<size_t> (fromSlot)]);
     if (fromSlot < toSlot)
     {
         for (int i = fromSlot; i < toSlot; ++i)
+        {
             slots[static_cast<size_t> (i)] = std::move (slots[static_cast<size_t> (i + 1)]);
+            childEditorWindows[static_cast<size_t> (i)].swap (
+                childEditorWindows[static_cast<size_t> (i + 1)]);
+        }
     }
     else
     {
         for (int i = fromSlot; i > toSlot; --i)
+        {
             slots[static_cast<size_t> (i)] = std::move (slots[static_cast<size_t> (i - 1)]);
+            childEditorWindows[static_cast<size_t> (i)].swap (
+                childEditorWindows[static_cast<size_t> (i - 1)]);
+        }
     }
     slots[static_cast<size_t> (toSlot)] = std::move (moved);
 
