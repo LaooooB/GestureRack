@@ -15,6 +15,7 @@ public:
     explicit PluginSlot (int indexToUse) noexcept;
 
     int getIndex() const noexcept { return slotIndex; }
+    void setIndexForReorder (int newIndex);
 
     bool hasPlugin() const noexcept { return graphNode != nullptr && description.has_value(); }
     bool isBypassed() const noexcept { return requestedBypass.load (std::memory_order_relaxed); }
@@ -48,11 +49,6 @@ public:
     void clearChildParameterMappings();
     void clearAllMappings();
     int getMappingCount (ControlGesture gesture) const;
-
-    // Moves the complete hosted-plugin state between rack positions while the
-    // PluginSlot objects themselves stay at their fixed physical indices.
-    // Gesture bindings follow the plugin and are re-indexed automatically.
-    void swapContentsWith (PluginSlot& other);
 
 private:
     int slotIndex = 0;
