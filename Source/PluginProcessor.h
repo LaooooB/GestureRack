@@ -48,9 +48,11 @@ public:
 
     void loadVst3FromFile (int slotIndex, const juce::File& file);
     void loadVst3FromFile (const juce::File& file) { loadVst3FromFile (getSelectedSlot(), file); }
+    void loadPluginDescription (int slotIndex, const juce::PluginDescription& description);
     void removeSlotPlugin (int slotIndex);
     void openChildEditor (int slotIndex);
     void openChildEditor() { openChildEditor (getSelectedSlot()); }
+    bool moveSlot (int fromSlot, int toSlot);
 
     int getSelectedSlot() const noexcept { return selectedSlot.load (std::memory_order_relaxed); }
     void setSelectedSlot (int slotIndex) noexcept;
