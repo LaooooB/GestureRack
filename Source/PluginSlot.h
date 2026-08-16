@@ -49,6 +49,11 @@ public:
     void clearAllMappings();
     int getMappingCount (ControlGesture gesture) const;
 
+    // Moves the complete hosted-plugin state between rack positions while the
+    // PluginSlot objects themselves stay at their fixed physical indices.
+    // Gesture bindings follow the plugin and are re-indexed automatically.
+    void swapContentsWith (PluginSlot& other);
+
 private:
     int slotIndex = 0;
     std::optional<juce::PluginDescription> description;
