@@ -2,9 +2,13 @@
 
 #include <JuceHeader.h>
 #include <array>
+#include <functional>
+#include <memory>
 #include "PluginProcessor.h"
 #include "ParameterInspector.h"
 #include "VisionFrameReader.h"
+
+class PluginBrowserComponent;
 
 class GestureRackAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                               private juce::Timer,
@@ -66,9 +70,59 @@ public:
     }
 
 private:
+    class RackSlotButton final : public juce::TextButton
+    {
+    public:
+        std::function<void (const juce::MouseEvent&)> dragDown;
+        std::function<void (const juce::MouseEvent&)> dragMove;
+        std::function<void (const juce::MouseEvent&)> dragUp;
+        std::function<void (const juce::MouseEvent&)> hoverMove;
+        std::function<void()> hoverExit;
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            juce::TextButton::mouseDown (e);
+            if (dragDown)
+                dragDown (e);
+        }
+
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            juce::TextButton::mouseDrag (e);
+            if (dragMove)
+                dragMove (e);
+        }
+
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            if (dragUp)
+                dragUp (e);
+            juce::TextButton::mouseUp (e);
+        }
+
+        void mouseMove (const juce::MouseEvent& e) override
+        {
+            juce::TextButton::mouseMove (e);
+            if (hoverMove)
+                hoverMove (e);
+        }
+
+        void mouseExit (const juce::MouseEvent& e) override
+        {
+            juce::TextButton::mouseExit (e);
+            if (hoverExit)
+                hoverExit();
+        }
+    };
+
     void timerCallback() override;
-    void choosePluginForSelectedSlot();
+    void showPluginBrowser();
+    void hidePluginBrowser();
     void updateSlotButtons();
+    void handleSlotMouseDown (int slotIndex, const juce::MouseEvent& e);
+    void handleSlotMouseDrag (const juce::MouseEvent& e);
+    void handleSlotMouseUp (const juce::MouseEvent& e);
+    int findNearestSlot (juce::Point<int> editorPoint) const;
     void drawHandOverlay (juce::Graphics&,
                           juce::Rectangle<float> imageArea,
                           const gr::HandSnapshot&,
@@ -77,7 +131,7 @@ private:
 
     GestureRackAudioProcessor& processor;
 
-    std::array<juce::TextButton, GestureRackAudioProcessor::slotCount> slotButtons;
+    std::array<RackSlotButton, GestureRackAudioProcessor::slotCount> slotButtons;
     std::array<juce::Rectangle<int>, 7> gestureRects {};
     juce::Rectangle<int> activeTargetRect;
     juce::Rectangle<int> bypassTargetRect;
@@ -87,18 +141,23 @@ private:
     juce::Point<int> lastMousePos { -9999, -9999 };
     int hoveredSlot = -1;
 
-    juce::TextButton loadButton { "LOAD" };
+    int slotDragSource = -1;
+    int slotDragTarget = -1;
+    bool slotDragging = false;
+    juce::Point<int> slotDragOrigin;
+
+    juce::TextButton loadButton { "PLUGINS" };
     juce::TextButton openButton { "OPEN" };
     juce::TextButton removeButton { "REMOVE" };
     juce::TextButton bypassButton { "ACTIVE" };
     juce::TextButton enableButton { "GESTURE ON" };
-    juce::TextButton calibrateHandsButton { "CALIBRATE RIGHT" };
+    juce::TextButton calibrateHandsButton { "CALIBRATE" };
     juce::TextButton swapHandsButton { "SWAP L/R" };
 
     gr::ParameterInspector parameterInspector;
     gr::VisionFrameReader frameReader;
     gr::VisionCameraFrame cameraFrame;
-    std::unique_ptr<juce::FileChooser> fileChooser;
+    std::unique_ptr<PluginBrowserComponent> pluginBrowser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GestureRackAudioProcessorEditor)
 };
