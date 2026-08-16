@@ -52,7 +52,7 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     refreshCatalog();
 
     addAndMakeVisible (searchBox);
-    searchBox.setSingleLine (true);
+    searchBox.setMultiLine (false, false);
     searchBox.setTextToShowWhenEmpty ("Search plugins", kMuted);
     searchBox.setColour (juce::TextEditor::backgroundColourId, kRaised);
     searchBox.setColour (juce::TextEditor::textColourId, kText);
@@ -60,7 +60,7 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     searchBox.setColour (juce::TextEditor::highlightedTextColourId, kText);
     searchBox.setColour (juce::TextEditor::outlineColourId, kBorder);
     searchBox.setColour (juce::TextEditor::focusedOutlineColourId, kBlue);
-    searchBox.setColour (juce::TextEditor::caretColourId, kAccent);
+    searchBox.setColour (juce::CaretComponent::caretColourId, kAccent);
     searchBox.onTextChange = [this] { rebuildFilter(); };
     searchBox.onReturnKey = [this] { loadSelected(); };
 
@@ -428,12 +428,12 @@ void PluginBrowserComponent::choosePathsToAdd()
         start = juce::File (searchPaths[0]);
 
     pathChooser = std::make_unique<juce::FileChooser> ("Add plugin folders", start, "*");
-    const auto flags = juce::FileBrowserComponent::openMode
-                     | juce::FileBrowserComponent::canSelectDirectories
-                     | juce::FileBrowserComponent::canSelectMultipleItems;
+    const auto chooserFlags = juce::FileBrowserComponent::openMode
+                            | juce::FileBrowserComponent::canSelectDirectories
+                            | juce::FileBrowserComponent::canSelectMultipleItems;
 
     juce::Component::SafePointer<PluginBrowserComponent> safe (this);
-    pathChooser->launchAsync (flags, [safe] (const juce::FileChooser& chooser)
+    pathChooser->launchAsync (chooserFlags, [safe] (const juce::FileChooser& chooser)
     {
         if (safe == nullptr)
             return;
