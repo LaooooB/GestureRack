@@ -75,6 +75,9 @@ target_sources(GestureRack PRIVATE
     Source/RackGraphManager.cpp
     Source/PluginProcessor.h
     Source/PluginProcessor.cpp
+    Source/RackInteraction.cpp
+    Source/PluginBrowser.h
+    Source/PluginBrowser.cpp
     Source/PluginEditor.h
     Source/PluginEditor.cpp)
 
