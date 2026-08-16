@@ -39,26 +39,35 @@ bool GestureRackAudioProcessor::moveSlot (int fromSlot, int toSlot)
     testSignalEnabled.store (false, std::memory_order_relaxed);
     rightRuntime.disarmForSlotChange();
 
-    // Cancel any async load that still targets a physical rack index. Existing
-    // loaded processors remain alive; only unfinished load callbacks are invalidated.
+    // Async loaders target array indices. Invalidate unfinished work before the
+    // slot objects move so a late callback can never install into the wrong place.
     for (auto& generation : slotLoadGenerations)
         generation.fetch_add (1, std::memory_order_relaxed);
 
-    // Child editor windows are tied to physical slot indices, so close them before
-    // the hosted processors move to new positions.
+    // Child editor windows are indexed by rack position, so close them before
+    // moving the hosted processors.
     for (auto& window : childEditorWindows)
         window.reset();
 
+    // Move the complete PluginSlot object, rather than swapping just its graph
+    // node. GestureBypassWrapper holds a reference to PluginSlot::requestedBypass;
+    // keeping those objects together preserves bypass control after reordering.
+    auto moved = std::move (slots[static_cast<size_t> (fromSlot)]);
     if (fromSlot < toSlot)
     {
         for (int i = fromSlot; i < toSlot; ++i)
-            slots[static_cast<size_t> (i)]->swapContentsWith (*slots[static_cast<size_t> (i + 1)]);
+            slots[static_cast<size_t> (i)] = std::move (slots[static_cast<size_t> (i + 1)]);
     }
     else
     {
         for (int i = fromSlot; i > toSlot; --i)
-            slots[static_cast<size_t> (i)]->swapContentsWith (*slots[static_cast<size_t> (i - 1)]);
+            slots[static_cast<size_t> (i)] = std::move (slots[static_cast<size_t> (i - 1)]);
     }
+    slots[static_cast<size_t> (toSlot)] = std::move (moved);
+
+    for (int i = 0; i < slotCount; ++i)
+        if (slots[static_cast<size_t> (i)] != nullptr)
+            slots[static_cast<size_t> (i)]->setIndexForReorder (i);
 
     auto newSelected = getSelectedSlot();
     if (newSelected == fromSlot)
