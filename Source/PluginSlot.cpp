@@ -29,6 +29,35 @@ juce::AudioPluginInstance* PluginSlot::getChild() const noexcept
     return nullptr;
 }
 
+void PluginSlot::swapContentsWith (PluginSlot& other)
+{
+    if (&other == this)
+        return;
+
+    // Rack reordering is initiated on the message thread. No other code takes
+    // two slot locks simultaneously, so keeping a stable left-to-right lock
+    // order avoids any possibility of an opposite-order deadlock later.
+    auto* first = slotIndex < other.slotIndex ? this : &other;
+    auto* second = first == this ? &other : this;
+    const juce::SpinLock::ScopedLockType firstLock (first->mappingsLock);
+    const juce::SpinLock::ScopedLockType secondLock (second->mappingsLock);
+
+    std::swap (description, other.description);
+    std::swap (graphNode, other.graphNode);
+    std::swap (lastError, other.lastError);
+    mappings.swap (other.mappings);
+
+    const auto thisBypass = requestedBypass.load (std::memory_order_relaxed);
+    const auto otherBypass = other.requestedBypass.load (std::memory_order_relaxed);
+    requestedBypass.store (otherBypass, std::memory_order_relaxed);
+    other.requestedBypass.store (thisBypass, std::memory_order_relaxed);
+
+    for (auto& binding : mappings)
+        binding.slotIndex = slotIndex;
+    for (auto& binding : other.mappings)
+        binding.slotIndex = other.slotIndex;
+}
+
 std::vector<GestureBinding> PluginSlot::getMappings() const
 {
     const juce::SpinLock::ScopedLockType lock (mappingsLock);
