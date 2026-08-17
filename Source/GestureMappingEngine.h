@@ -33,6 +33,8 @@ public:
     void clearAllMappings (int slotIndex);
 
     void triggerGestureEntered (int slotIndex, ControlGesture gesture);
+    void triggerGestureExited (int slotIndex, ControlGesture gesture);
+    void releaseAllActiveGestures();
     void processContinuous (int slotIndex,
                             ControlGesture gesture,
                             float normalizedSource,
@@ -50,6 +52,7 @@ private:
     struct RuntimeState
     {
         bool initialised = false;
+        bool hostGestureOpen = false;
         float lastSource = 0.0f;
         float smoothedOutput = 0.0f;
     };
@@ -58,7 +61,12 @@ private:
     juce::String getPluginIdentifier (int slotIndex) const;
     static juce::String getParameterStableId (const juce::AudioProcessorParameter& parameter);
     static bool sameParameterTarget (const GestureBinding& a, const GestureBinding& b);
+    static MappingMode defaultModeForParameter (const ParameterDescriptor& descriptor) noexcept;
+    void removeMappingsOwnedByGesture (int slotIndex, ControlGesture gesture, const juce::Uuid* exceptId = nullptr);
     void pruneRuntimeStatesForSlot (int slotIndex);
+    void endHostGesture (int slotIndex, const GestureBinding& binding);
+    void writeParameter (juce::AudioProcessorParameter& parameter, float normalizedValue);
+    float discreteStepDelta (const juce::AudioProcessorParameter& parameter) const noexcept;
 
     RackGraphManager::SlotArray& slots;
     std::map<std::string, RuntimeState> runtimeStates;

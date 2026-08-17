@@ -13,9 +13,25 @@ enum class MappingTargetType : int
 
 enum class MappingMode : int
 {
+    // Keep the first three numeric values stable for state compatibility.
     triggerSetActive = 0,
     triggerSetBypassed,
-    absoluteHeight
+    absoluteHeight,
+    toggleParameter,
+    momentaryParameter,
+    cycleParameter,
+    stepUpParameter,
+    stepDownParameter,
+    triggerParameter
+};
+
+enum class ParameterKind : int
+{
+    continuous = 0,
+    toggle,
+    choice,
+    stepped,
+    readOnly
 };
 
 struct ParameterDescriptor
@@ -28,7 +44,10 @@ struct ParameterDescriptor
     juce::String displayValue;
     bool automatable = false;
     bool discrete = false;
+    bool boolean = false;
+    bool orientationInverted = false;
     int numSteps = 0;
+    ParameterKind kind = ParameterKind::continuous;
 };
 
 struct GestureBinding
@@ -46,12 +65,12 @@ struct GestureBinding
 
     float minValue = 0.0f;
     float maxValue = 1.0f;
-    // smoothingMs is the one-EMA time constant tau, NOT a hard cap. tau=80ms
-    // takes ~240ms to reach 95% of a step; tau=25ms reaches it in ~75ms. The
-    // default is the snappy Live value; 80ms remains available as a Smooth
-    // preset via the ParameterInspector smoothing control.
     float smoothingMs = 25.0f;
     float deadband = 0.008f;
+
+    // -1..1. 0 is linear. Negative bends toward fast response near the low
+    // end; positive bends toward finer resolution near the low end.
+    float curve = 0.0f;
     bool inverted = false;
     bool enabled = true;
 
@@ -61,4 +80,6 @@ struct GestureBinding
 
 juce::String mappingTargetTypeToString (MappingTargetType type);
 juce::String mappingModeToString (MappingMode mode);
+juce::String parameterKindToString (ParameterKind kind);
+float applyMappingCurve (float source, float curve) noexcept;
 }

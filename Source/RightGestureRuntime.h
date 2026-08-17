@@ -22,18 +22,22 @@ public:
     RightGestureRuntimeFrame update (bool handPresent, ControlGesture stableGesture) noexcept;
 
     bool isArmed() const noexcept { return armed; }
-    ControlGesture getCurrentGesture() const noexcept { return currentGesture; }
+    ControlGesture getCurrentGesture() const noexcept { return acceptedGesture; }
     ControlGesture getBlockedGesture() const noexcept { return blockedGesture; }
-
     void restoreArmingState (bool shouldBeArmed, ControlGesture blocked) noexcept;
 
 private:
-    static constexpr int missingFramesBeforeReset = 5; // ~100 ms at the 50 Hz control rate.
+    static constexpr int enterFrames = 3;      // ~30 ms at 100 Hz
+    static constexpr int switchFrames = 4;     // resist one-frame class swaps
+    static constexpr int releaseFrames = 6;    // ~60 ms dropout hysteresis
+
+    void clearCandidate() noexcept;
 
     bool armed = true;
-    int missingFrameCount = 0;
-    ControlGesture currentGesture = ControlGesture::unknown;
-    ControlGesture previousGesture = ControlGesture::unknown;
+    ControlGesture acceptedGesture = ControlGesture::unknown;
     ControlGesture blockedGesture = ControlGesture::unknown;
+    ControlGesture candidateGesture = ControlGesture::unknown;
+    int candidateFrames = 0;
+    int missingFrames = 0;
 };
 }

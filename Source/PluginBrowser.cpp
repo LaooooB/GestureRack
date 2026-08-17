@@ -11,12 +11,10 @@ const juce::Colour kText      { 232, 235, 240 };
 const juce::Colour kMuted     { 139, 148, 162 };
 const juce::Colour kAccent    { 245, 178, 60 };
 const juce::Colour kBlue      { 86, 156, 235 };
-const juce::Colour kGreen     { 93, 190, 126 };
 
 juce::String compactPluginName (const juce::PluginDescription& description)
 {
-    return description.name.isNotEmpty()
-        ? description.name
+    return description.name.isNotEmpty() ? description.name
         : juce::File (description.fileOrIdentifier).getFileNameWithoutExtension();
 }
 }
@@ -24,18 +22,12 @@ juce::String compactPluginName (const juce::PluginDescription& description)
 class PluginBrowserComponent::ScanThread final : public juce::Thread
 {
 public:
-    explicit ScanThread (PluginBrowserComponent& ownerToUse)
-        : juce::Thread ("Gesture Rack Plugin Scan"), owner (ownerToUse)
-    {
-    }
-
-    void run() override
-    {
-        owner.runScan (*this);
-    }
-
+    ScanThread (PluginBrowserComponent& ownerToUse, bool clearToUse)
+        : juce::Thread ("Gesture Rack Safe Scan"), owner (ownerToUse), clearBlacklist (clearToUse) {}
+    void run() override { owner.runScan (*this, clearBlacklist); }
 private:
     PluginBrowserComponent& owner;
+    bool clearBlacklist = false;
 };
 
 PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
@@ -46,14 +38,13 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     setOpaque (true);
     setWantsKeyboardFocus (true);
     juce::addDefaultFormatsToManager (formatManager);
-
     loadPaths();
     loadCatalog();
     refreshCatalog();
 
     addAndMakeVisible (searchBox);
     searchBox.setMultiLine (false, false);
-    searchBox.setTextToShowWhenEmpty ("Search plugins", kMuted);
+    searchBox.setTextToShowWhenEmpty ("Search name / vendor / category", kMuted);
     searchBox.setColour (juce::TextEditor::backgroundColourId, kRaised);
     searchBox.setColour (juce::TextEditor::textColourId, kText);
     searchBox.setColour (juce::TextEditor::highlightColourId, kBlue.withAlpha (0.35f));
@@ -64,30 +55,22 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     searchBox.onTextChange = [this] { rebuildFilter(); };
     searchBox.onReturnKey = [this] { loadSelected(); };
 
-    addAndMakeVisible (pathsButton);
-    addAndMakeVisible (scanButton);
-    addAndMakeVisible (loadButton);
-    addAndMakeVisible (closeButton);
     for (auto* button : { &pathsButton, &scanButton, &loadButton, &closeButton })
     {
+        addAndMakeVisible (*button);
         button->setColour (juce::TextButton::buttonColourId, kRaised);
         button->setColour (juce::TextButton::buttonOnColourId, kBlue);
         button->setColour (juce::TextButton::textColourOffId, kText);
         button->setColour (juce::TextButton::textColourOnId, kText);
     }
-
     pathsButton.onClick = [this] { showPathsMenu(); };
-    scanButton.onClick = [this] { startScan(); };
+    scanButton.onClick = [this] { startScan (false); };
     loadButton.onClick = [this] { loadSelected(); };
-    closeButton.onClick = [this]
-    {
-        if (closeCallback)
-            closeCallback();
-    };
+    closeButton.onClick = [this] { if (closeCallback) closeCallback(); };
     loadButton.setEnabled (false);
 
     addAndMakeVisible (resultList);
-    resultList.setRowHeight (36);
+    resultList.setRowHeight (38);
     resultList.setColour (juce::ListBox::backgroundColourId, kPanel);
     resultList.setColour (juce::ListBox::outlineColourId, kBorder);
     resultList.setOutlineThickness (1);
@@ -106,11 +89,10 @@ PluginBrowserComponent::~PluginBrowserComponent()
 {
     stopTimer();
     resultList.setModel (nullptr);
-
     if (scanThread != nullptr && scanThread->isThreadRunning())
     {
         scanThread->signalThreadShouldExit();
-        scanThread->stopThread (10000);
+        scanThread->stopThread (5000);
     }
 }
 
@@ -128,41 +110,30 @@ bool PluginBrowserComponent::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::escapeKey)
     {
-        if (closeCallback)
-            closeCallback();
+        if (closeCallback) closeCallback();
         return true;
     }
-
     if (key == juce::KeyPress::returnKey)
     {
         loadSelected();
         return true;
     }
-
     return false;
 }
 
-int PluginBrowserComponent::getNumRows()
-{
-    return static_cast<int> (filteredIndices.size());
-}
+int PluginBrowserComponent::getNumRows() { return static_cast<int> (filteredIndices.size()); }
 
-void PluginBrowserComponent::paintListBoxItem (int rowNumber,
-                                               juce::Graphics& g,
-                                               int width,
-                                               int height,
-                                               bool rowIsSelected)
+void PluginBrowserComponent::paintListBoxItem (int rowNumber, juce::Graphics& g,
+                                               int width, int height, bool rowIsSelected)
 {
     if (! juce::isPositiveAndBelow (rowNumber, static_cast<int> (filteredIndices.size())))
         return;
-
     const auto catalogIndex = filteredIndices[static_cast<size_t> (rowNumber)];
     if (! juce::isPositiveAndBelow (catalogIndex, catalog.size()))
         return;
 
     const auto& plugin = catalog.getReference (catalogIndex);
     auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 2);
-
     if (rowIsSelected)
     {
         g.setColour (kBlue.withAlpha (0.18f));
@@ -171,20 +142,15 @@ void PluginBrowserComponent::paintListBoxItem (int rowNumber,
         g.drawRoundedRectangle (bounds.toFloat(), 6.0f, 1.0f);
     }
 
-    auto meta = bounds.removeFromRight (juce::jmin (260, bounds.getWidth() * 42 / 100));
+    auto meta = bounds.removeFromRight (juce::jmin (300, bounds.getWidth() * 46 / 100));
     bounds.removeFromRight (8);
-
     g.setColour (kText);
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-    g.drawFittedText (compactPluginName (plugin), bounds,
-                      juce::Justification::centredLeft, 1);
+    g.drawFittedText (compactPluginName (plugin), bounds, juce::Justification::centredLeft, 1);
 
     auto metaText = plugin.manufacturerName;
-    if (plugin.category.isNotEmpty())
-        metaText += (metaText.isNotEmpty() ? "  /  " : "") + plugin.category;
-    if (plugin.pluginFormatName.isNotEmpty())
-        metaText += (metaText.isNotEmpty() ? "  /  " : "") + plugin.pluginFormatName;
-
+    if (plugin.category.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  /  " : "") + plugin.category;
+    if (plugin.pluginFormatName.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  /  " : "") + plugin.pluginFormatName;
     g.setColour (kMuted);
     g.setFont (juce::FontOptions (10.0f));
     g.drawFittedText (metaText, meta, juce::Justification::centredRight, 1);
@@ -208,22 +174,24 @@ void PluginBrowserComponent::timerCallback()
     if (version != displayedCatalogVersion && ! scanning.load (std::memory_order_relaxed))
     {
         displayedCatalogVersion = version;
+        loadCatalog();
         refreshCatalog();
     }
 
     const auto isScanning = scanning.load (std::memory_order_relaxed);
-    scanButton.setButtonText (isScanning ? "SCANNING" : "SCAN");
+    scanButton.setButtonText (isScanning ? "SCANNING" : "SAFE SCAN");
     scanButton.setEnabled (! isScanning);
     pathsButton.setEnabled (! isScanning);
 
-    const auto pathCount = searchPaths.size();
-    juce::String text = juce::String (filteredIndices.size()) + " FX";
-    text += "  /  " + juce::String (pathCount) + (pathCount == 1 ? " PATH" : " PATHS");
+    juce::String text = juce::String (filteredIndices.size()) + " FX"
+                      + "  /  " + juce::String (searchPaths.size()) + " PATHS";
+    const auto blacklisted = getBlacklistedCount();
+    if (blacklisted > 0)
+        text += "  /  " + juce::String (blacklisted) + " FAILED";
     const auto scanText = getScanStatus();
     if (scanText.isNotEmpty() && scanText != "READY")
         text += "  /  " + scanText;
     statusLabel.setText (text, juce::dontSendNotification);
-
     repaint();
 }
 
@@ -237,36 +205,20 @@ void PluginBrowserComponent::refreshCatalog()
 void PluginBrowserComponent::rebuildFilter()
 {
     filteredIndices.clear();
-
     auto tokens = juce::StringArray::fromTokens (searchBox.getText().trim().toLowerCase(), " ", "");
     tokens.removeEmptyStrings();
-
     for (int i = 0; i < catalog.size(); ++i)
     {
         const auto& plugin = catalog.getReference (i);
-        if (plugin.name.containsIgnoreCase ("Gesture Rack")
-            || plugin.isInstrument
-            || plugin.numInputChannels <= 0)
+        if (plugin.name.containsIgnoreCase ("Gesture Rack") || plugin.isInstrument || plugin.numInputChannels <= 0)
             continue;
-
-        const auto haystack = (plugin.name + " "
-                             + plugin.manufacturerName + " "
-                             + plugin.category + " "
-                             + plugin.pluginFormatName + " "
-                             + plugin.fileOrIdentifier).toLowerCase();
-
+        const auto haystack = (plugin.name + " " + plugin.manufacturerName + " " + plugin.category
+                             + " " + plugin.pluginFormatName + " " + plugin.fileOrIdentifier).toLowerCase();
         bool matches = true;
         for (const auto& token : tokens)
-            if (! haystack.contains (token))
-            {
-                matches = false;
-                break;
-            }
-
-        if (matches)
-            filteredIndices.push_back (i);
+            if (! haystack.contains (token)) { matches = false; break; }
+        if (matches) filteredIndices.push_back (i);
     }
-
     resultList.deselectAllRows();
     resultList.updateContent();
     resultList.repaint();
@@ -278,25 +230,19 @@ void PluginBrowserComponent::loadSelected()
     const auto row = resultList.getSelectedRow();
     if (! juce::isPositiveAndBelow (row, static_cast<int> (filteredIndices.size())))
         return;
-
     const auto catalogIndex = filteredIndices[static_cast<size_t> (row)];
     if (! juce::isPositiveAndBelow (catalogIndex, catalog.size()))
         return;
-
-    if (loadCallback)
-        loadCallback (targetSlot, catalog.getReference (catalogIndex));
-    if (closeCallback)
-        closeCallback();
+    if (loadCallback) loadCallback (targetSlot, catalog.getReference (catalogIndex));
+    if (closeCallback) closeCallback();
 }
 
-void PluginBrowserComponent::startScan()
+void PluginBrowserComponent::startScan (bool clearBlacklist)
 {
     if (scanning.exchange (true, std::memory_order_acq_rel))
         return;
-
     scanProgress.store (0.0f, std::memory_order_relaxed);
-    setScanStatus ("STARTING");
-
+    setScanStatus (clearBlacklist ? "RETRY FAILED" : "STARTING SAFE SCAN");
     if (scanThread != nullptr)
     {
         if (scanThread->isThreadRunning())
@@ -306,8 +252,7 @@ void PluginBrowserComponent::startScan()
         }
         scanThread.reset();
     }
-
-    scanThread = std::make_unique<ScanThread> (*this);
+    scanThread = std::make_unique<ScanThread> (*this, clearBlacklist);
     if (! scanThread->startThread (juce::Thread::Priority::background))
     {
         scanThread.reset();
@@ -316,64 +261,128 @@ void PluginBrowserComponent::startScan()
     }
 }
 
-void PluginBrowserComponent::runScan (ScanThread& thread)
+juce::File PluginBrowserComponent::findScannerExecutable() const
 {
-    const auto paths = getSearchPath();
-    if (paths.getNumPaths() == 0)
+    const auto current = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+   #if JUCE_WINDOWS
+    const juce::String scannerName { "GestureRackScanner.exe" };
+   #else
+    const juce::String scannerName { "GestureRackScanner" };
+   #endif
+    auto candidate = current.getSiblingFile (scannerName);
+    if (candidate.existsAsFile())
+        return candidate;
+    candidate = current.getParentDirectory().getChildFile (scannerName);
+    if (candidate.existsAsFile())
+        return candidate;
+    return {};
+}
+
+void PluginBrowserComponent::runScan (ScanThread& thread, bool clearBlacklist)
+{
+    const auto helper = findScannerExecutable();
+    if (! helper.existsAsFile())
+    {
+        setScanStatus ("SCANNER HELPER MISSING");
+        scanning.store (false, std::memory_order_release);
+        return;
+    }
+    if (getSearchPath().getNumPaths() == 0)
     {
         setScanStatus ("NO PATHS");
         scanning.store (false, std::memory_order_release);
         return;
     }
 
-    const auto deadMansPedal = getDeadMansPedalFile();
-    bool foundScannableFormat = false;
+    getSettingsDirectory().createDirectory();
+    getScannerStatusFile().deleteFile();
+    constexpr int maxCrashRecoveries = 64;
+    constexpr int hangTimeoutMs = 60000;
+    int recovery = 0;
+    bool clearOnNextRun = clearBlacklist;
 
-    for (auto* format : formatManager.getFormats())
+    while (! thread.threadShouldExit() && recovery <= maxCrashRecoveries)
     {
-        if (thread.threadShouldExit())
-            break;
-        if (format == nullptr || ! format->canScanForPlugins())
-            continue;
-        if (format->getName() != "VST3")
-            continue;
-
-        foundScannableFormat = true;
-        juce::PluginDirectoryScanner scanner (knownPlugins,
-                                               *format,
-                                               paths,
-                                               true,
-                                               deadMansPedal,
-                                               false);
-
-        while (! thread.threadShouldExit())
+        juce::StringArray args;
+        args.add (helper.getFullPathName());
+        args.add ("--paths"); args.add (getPathsFile().getFullPathName());
+        args.add ("--catalog"); args.add (getCatalogFile().getFullPathName());
+        args.add ("--deadman"); args.add (getDeadMansPedalFile().getFullPathName());
+        args.add ("--status"); args.add (getScannerStatusFile().getFullPathName());
+        if (clearOnNextRun)
         {
-            juce::String pluginBeingScanned;
-            if (! scanner.scanNextFile (true, pluginBeingScanned))
-                break;
-
-            scanProgress.store (scanner.getProgress(), std::memory_order_relaxed);
-            auto display = juce::File (pluginBeingScanned).getFileNameWithoutExtension();
-            if (display.isEmpty())
-                display = pluginBeingScanned;
-            if (display.length() > 42)
-                display = display.substring (0, 39) + "...";
-            setScanStatus ("SCAN  " + display);
+            args.add ("--clear-blacklist");
+            clearOnNextRun = false;
         }
-    }
 
-    knownPlugins.scanFinished();
+        juce::ChildProcess process;
+        if (! process.start (args, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
+        {
+            setScanStatus ("SCANNER LAUNCH FAILED");
+            break;
+        }
 
-    if (! thread.threadShouldExit())
-    {
-        saveCatalog();
+        auto lastHeartbeat = juce::Time::currentTimeMillis();
+        auto lastModified = int64_t { 0 };
+        bool killedForHang = false;
+        while (process.isRunning() && ! thread.threadShouldExit())
+        {
+            const auto statusFile = getScannerStatusFile();
+            if (statusFile.existsAsFile())
+            {
+                const auto modified = statusFile.getLastModificationTime().toMilliseconds();
+                if (modified != lastModified)
+                {
+                    lastModified = modified;
+                    lastHeartbeat = juce::Time::currentTimeMillis();
+                    const auto line = statusFile.loadFileAsString().trim();
+                    auto fields = juce::StringArray::fromTokens (line, "\t", "");
+                    if (fields.size() >= 3 && fields[1] == "SCAN")
+                    {
+                        if (fields.size() >= 4)
+                            scanProgress.store (static_cast<float> (fields[2].getDoubleValue()), std::memory_order_relaxed);
+                        auto name = juce::File (fields.getLast()).getFileNameWithoutExtension();
+                        if (name.length() > 38) name = name.substring (0, 35) + "...";
+                        setScanStatus ("SAFE  " + name);
+                    }
+                }
+            }
+            if (juce::Time::currentTimeMillis() - lastHeartbeat > hangTimeoutMs)
+            {
+                process.kill();
+                killedForHang = true;
+                setScanStatus ("HUNG PLUGIN ISOLATED");
+                break;
+            }
+            juce::Thread::sleep (100);
+        }
+
+        if (thread.threadShouldExit())
+        {
+            if (process.isRunning()) process.kill();
+            setScanStatus ("SCAN STOPPED");
+            break;
+        }
+
+        process.waitForProcessToFinish (2000);
+        const auto exitCode = process.getExitCode();
+        if (! killedForHang && exitCode == 0)
+        {
+            scanProgress.store (1.0f, std::memory_order_relaxed);
+            setScanStatus ("DONE");
+            catalogVersion.fetch_add (1, std::memory_order_release);
+            break;
+        }
+
+        ++recovery;
         catalogVersion.fetch_add (1, std::memory_order_release);
-        scanProgress.store (1.0f, std::memory_order_relaxed);
-        setScanStatus (foundScannableFormat ? "DONE" : "VST3 FORMAT UNAVAILABLE");
-    }
-    else
-    {
-        setScanStatus ("SCAN STOPPED");
+        if (recovery > maxCrashRecoveries)
+        {
+            setScanStatus ("TOO MANY FAILED PLUGINS");
+            break;
+        }
+        setScanStatus ("RECOVERING  " + juce::String (recovery));
+        juce::Thread::sleep (150);
     }
 
     scanning.store (false, std::memory_order_release);
@@ -391,12 +400,17 @@ juce::String PluginBrowserComponent::getScanStatus() const
     return scanStatus;
 }
 
+int PluginBrowserComponent::getBlacklistedCount() const
+{
+    return knownPlugins.getBlacklistedFiles().size();
+}
+
 void PluginBrowserComponent::showPathsMenu()
 {
     juce::PopupMenu menu;
     menu.addItem (1, "ADD FOLDER...");
     menu.addItem (2, "RESET DEFAULTS");
-
+    menu.addItem (3, "RETRY FAILED PLUGINS", getBlacklistedCount() > 0);
     if (! searchPaths.isEmpty())
     {
         juce::PopupMenu removeMenu;
@@ -410,38 +424,28 @@ void PluginBrowserComponent::showPathsMenu()
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pathsButton),
                         [safe] (int result)
                         {
-                            if (safe == nullptr || result == 0)
-                                return;
-                            if (result == 1)
-                                safe->choosePathsToAdd();
-                            else if (result == 2)
-                                safe->resetDefaultPaths();
-                            else if (result >= 1000)
-                                safe->removePath (result - 1000);
+                            if (safe == nullptr || result == 0) return;
+                            if (result == 1) safe->choosePathsToAdd();
+                            else if (result == 2) safe->resetDefaultPaths();
+                            else if (result == 3) safe->startScan (true);
+                            else if (result >= 1000) safe->removePath (result - 1000);
                         });
 }
 
 void PluginBrowserComponent::choosePathsToAdd()
 {
     auto start = juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory);
-    if (! searchPaths.isEmpty())
-        start = juce::File (searchPaths[0]);
-
+    if (! searchPaths.isEmpty()) start = juce::File (searchPaths[0]);
     pathChooser = std::make_unique<juce::FileChooser> ("Add plugin folders", start, "*");
     const auto chooserFlags = juce::FileBrowserComponent::openMode
                             | juce::FileBrowserComponent::canSelectDirectories
                             | juce::FileBrowserComponent::canSelectMultipleItems;
-
     juce::Component::SafePointer<PluginBrowserComponent> safe (this);
     pathChooser->launchAsync (chooserFlags, [safe] (const juce::FileChooser& chooser)
     {
-        if (safe == nullptr)
-            return;
-
+        if (safe == nullptr) return;
         for (const auto& folder : chooser.getResults())
-            if (folder.isDirectory())
-                safe->searchPaths.addIfNotAlreadyThere (folder.getFullPathName());
-
+            if (folder.isDirectory()) safe->searchPaths.addIfNotAlreadyThere (folder.getFullPathName());
         safe->savePaths();
         safe->setScanStatus ("PATHS UPDATED");
         safe->repaint();
@@ -451,17 +455,13 @@ void PluginBrowserComponent::choosePathsToAdd()
 void PluginBrowserComponent::resetDefaultPaths()
 {
     searchPaths.clear();
-
     for (auto* format : formatManager.getFormats())
     {
-        if (format == nullptr || format->getName() != "VST3")
-            continue;
-
+        if (format == nullptr || format->getName() != "VST3") continue;
         const auto defaults = format->getDefaultLocationsToSearch();
         for (int i = 0; i < defaults.getNumPaths(); ++i)
             searchPaths.addIfNotAlreadyThere (defaults[i].getFullPathName());
     }
-
     savePaths();
     setScanStatus ("DEFAULT PATHS");
     repaint();
@@ -469,9 +469,7 @@ void PluginBrowserComponent::resetDefaultPaths()
 
 void PluginBrowserComponent::removePath (int index)
 {
-    if (! juce::isPositiveAndBelow (index, searchPaths.size()))
-        return;
-
+    if (! juce::isPositiveAndBelow (index, searchPaths.size())) return;
     searchPaths.remove (index);
     savePaths();
     setScanStatus ("PATH REMOVED");
@@ -481,8 +479,7 @@ void PluginBrowserComponent::removePath (int index)
 juce::FileSearchPath PluginBrowserComponent::getSearchPath() const
 {
     juce::FileSearchPath result;
-    for (const auto& path : searchPaths)
-        result.addIfNotAlreadyThere (juce::File (path));
+    for (const auto& path : searchPaths) result.addIfNotAlreadyThere (juce::File (path));
     result.removeRedundantPaths();
     return result;
 }
@@ -497,105 +494,69 @@ void PluginBrowserComponent::loadPaths()
         for (auto line : lines)
         {
             line = line.trim();
-            if (line.isNotEmpty())
-                searchPaths.addIfNotAlreadyThere (line);
+            if (line.isNotEmpty()) searchPaths.addIfNotAlreadyThere (line);
         }
     }
-
-    if (searchPaths.isEmpty())
-        resetDefaultPaths();
+    if (searchPaths.isEmpty()) resetDefaultPaths();
 }
 
 void PluginBrowserComponent::savePaths() const
 {
-    const auto dir = getSettingsDirectory();
-    dir.createDirectory();
+    getSettingsDirectory().createDirectory();
     getPathsFile().replaceWithText (searchPaths.joinIntoString ("\n"));
 }
 
 void PluginBrowserComponent::loadCatalog()
 {
+    knownPlugins.clear();
     const auto file = getCatalogFile();
-    if (! file.existsAsFile())
-        return;
-
-    if (auto xml = juce::XmlDocument::parse (file))
-        knownPlugins.recreateFromXml (*xml);
-}
-
-void PluginBrowserComponent::saveCatalog()
-{
-    const auto dir = getSettingsDirectory();
-    dir.createDirectory();
-    if (auto xml = knownPlugins.createXml())
-        getCatalogFile().replaceWithText (xml->toString());
+    if (! file.existsAsFile()) return;
+    if (auto xml = juce::XmlDocument::parse (file)) knownPlugins.recreateFromXml (*xml);
 }
 
 juce::File PluginBrowserComponent::getSettingsDirectory() const
 {
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("GestureRack");
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("GestureRack");
 }
-
-juce::File PluginBrowserComponent::getCatalogFile() const
-{
-    return getSettingsDirectory().getChildFile ("plugin_catalog.xml");
-}
-
-juce::File PluginBrowserComponent::getPathsFile() const
-{
-    return getSettingsDirectory().getChildFile ("plugin_paths.txt");
-}
-
-juce::File PluginBrowserComponent::getDeadMansPedalFile() const
-{
-    return getSettingsDirectory().getChildFile ("plugin_scan_dead_mans_pedal.txt");
-}
+juce::File PluginBrowserComponent::getCatalogFile() const { return getSettingsDirectory().getChildFile ("plugin_catalog.xml"); }
+juce::File PluginBrowserComponent::getPathsFile() const { return getSettingsDirectory().getChildFile ("plugin_paths.txt"); }
+juce::File PluginBrowserComponent::getDeadMansPedalFile() const { return getSettingsDirectory().getChildFile ("plugin_scan_dead_mans_pedal.txt"); }
+juce::File PluginBrowserComponent::getScannerStatusFile() const { return getSettingsDirectory().getChildFile ("plugin_scan_status.txt"); }
 
 void PluginBrowserComponent::paint (juce::Graphics& g)
 {
     g.fillAll (kBg);
-
     g.setColour (kPanel);
     g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 12.0f);
     g.setColour (kBorder);
     g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 12.0f, 1.0f);
-
     g.setColour (kText);
     g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
     g.drawText ("PLUGINS  /  SLOT " + juce::String (targetSlot + 1),
                 14, 10, getWidth() - 28, 20, juce::Justification::centredLeft);
+    g.setColour (kMuted);
+    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+    g.drawText ("ISOLATED SCANNER", getWidth() - 180, 10, 164, 20, juce::Justification::centredRight);
 
     if (scanning.load (std::memory_order_relaxed))
     {
-        auto progress = juce::Rectangle<float> (14.0f, 36.0f,
-                                                 static_cast<float> (getWidth() - 28), 3.0f);
-        g.setColour (kRaised);
-        g.fillRect (progress);
-        progress.setWidth (progress.getWidth()
-                           * juce::jlimit (0.0f, 1.0f, scanProgress.load (std::memory_order_relaxed)));
-        g.setColour (kAccent);
-        g.fillRect (progress);
+        auto progress = juce::Rectangle<float> (14.0f, 36.0f, static_cast<float> (getWidth() - 28), 3.0f);
+        g.setColour (kRaised); g.fillRect (progress);
+        progress.setWidth (progress.getWidth() * juce::jlimit (0.0f, 1.0f, scanProgress.load (std::memory_order_relaxed)));
+        g.setColour (kAccent); g.fillRect (progress);
     }
 }
 
 void PluginBrowserComponent::resized()
 {
     auto bounds = getLocalBounds().reduced (14);
-    bounds.removeFromTop (30);
-    bounds.removeFromTop (6);
-
+    bounds.removeFromTop (36);
     auto toolbar = bounds.removeFromTop (34);
-    closeButton.setBounds (toolbar.removeFromRight (70));
-    toolbar.removeFromRight (6);
-    loadButton.setBounds (toolbar.removeFromRight (70));
-    toolbar.removeFromRight (10);
-    scanButton.setBounds (toolbar.removeFromRight (82));
-    toolbar.removeFromRight (6);
-    pathsButton.setBounds (toolbar.removeFromRight (82));
-    toolbar.removeFromRight (10);
+    closeButton.setBounds (toolbar.removeFromRight (70)); toolbar.removeFromRight (6);
+    loadButton.setBounds (toolbar.removeFromRight (70)); toolbar.removeFromRight (10);
+    scanButton.setBounds (toolbar.removeFromRight (96)); toolbar.removeFromRight (6);
+    pathsButton.setBounds (toolbar.removeFromRight (82)); toolbar.removeFromRight (10);
     searchBox.setBounds (toolbar);
-
     bounds.removeFromTop (10);
     auto footer = bounds.removeFromBottom (24);
     statusLabel.setBounds (footer);

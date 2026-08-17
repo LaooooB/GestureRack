@@ -50,9 +50,22 @@ public:
     void loadVst3FromFile (const juce::File& file) { loadVst3FromFile (getSelectedSlot(), file); }
     void loadPluginDescription (int slotIndex, const juce::PluginDescription& description);
     void removeSlotPlugin (int slotIndex);
-    void openChildEditor (int slotIndex);
-    void openChildEditor() { openChildEditor (getSelectedSlot()); }
     bool moveSlot (int fromSlot, int toSlot);
+
+    // Native child editors are embedded by PluginEditor. Ownership stays with
+    // GestureBypassWrapper so editor lifetime cannot outlive the hosted plugin.
+    juce::AudioProcessorEditor* getOrCreateSlotEditor (int slotIndex);
+    bool slotHasNativeEditor (int slotIndex) const noexcept;
+    uintptr_t getSlotChildIdentity (int slotIndex) const noexcept;
+
+    double getHostSampleRateForUi() const noexcept
+    {
+        return hostSampleRate.load (std::memory_order_relaxed);
+    }
+    int getHostBlockSizeForUi() const noexcept
+    {
+        return hostBlockSize.load (std::memory_order_relaxed);
+    }
 
     int getSelectedSlot() const noexcept { return selectedSlot.load (std::memory_order_relaxed); }
     void setSelectedSlot (int slotIndex) noexcept;
@@ -126,8 +139,6 @@ public:
     juce::String getMappingStatus() const { return mappingStatus; }
 
 private:
-    class ChildEditorWindow;
-
     static bool isValidSlotIndex (int slotIndex) noexcept
     {
         return slotIndex >= 0 && slotIndex < slotCount;
@@ -151,6 +162,8 @@ private:
     void installDefaultMappingsForAllSlots();
     void updateTotalLatency();
     void updateMappingStatus (const juce::String& text);
+    std::optional<juce::PluginDescription> findCatalogDescriptionForFile (const juce::File& file) const;
+    static juce::File getPluginCatalogFile();
 
     gr::VisionReceiver vision;
     std::atomic<bool> gestureEnabled { true };
@@ -167,12 +180,8 @@ private:
     gr::ParameterLearnManager parameterLearnManager;
 
     juce::AudioPluginFormatManager formatManager;
-    juce::KnownPluginList knownPlugins;
-
-    std::array<std::unique_ptr<ChildEditorWindow>, slotCount> childEditorWindows;
     std::array<std::atomic<uint64_t>, slotCount> slotLoadGenerations {};
     std::atomic<uint64_t> stateRestoreGeneration { 0 };
-
     std::shared_ptr<std::atomic<bool>> aliveFlag { std::make_shared<std::atomic<bool>> (true) };
 
     std::atomic<int> testGesture { static_cast<int> (gr::ControlGesture::victory) };
@@ -180,6 +189,8 @@ private:
     std::atomic<bool> testSignalEnabled { false };
     juce::String mappingStatus { "MAPPING READY" };
 
+    std::atomic<double> hostSampleRate { 0.0 };
+    std::atomic<int> hostBlockSize { 0 };
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> hostBypassDelay
         { gr::RackGraphManager::maxRackLatencySamples };
     bool prepared = false;

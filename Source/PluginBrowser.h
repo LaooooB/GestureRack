@@ -27,11 +27,7 @@ private:
     class ScanThread;
 
     int getNumRows() override;
-    void paintListBoxItem (int rowNumber,
-                           juce::Graphics&,
-                           int width,
-                           int height,
-                           bool rowIsSelected) override;
+    void paintListBoxItem (int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected) override;
     void selectedRowsChanged (int lastRowSelected) override;
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
 
@@ -40,10 +36,11 @@ private:
     void rebuildFilter();
     void loadSelected();
 
-    void startScan();
-    void runScan (ScanThread& thread);
+    void startScan (bool clearBlacklist = false);
+    void runScan (ScanThread& thread, bool clearBlacklist);
     void setScanStatus (juce::String text);
     juce::String getScanStatus() const;
+    int getBlacklistedCount() const;
 
     void showPathsMenu();
     void choosePathsToAdd();
@@ -53,12 +50,13 @@ private:
     void loadPaths();
     void savePaths() const;
     void loadCatalog();
-    void saveCatalog();
 
     juce::File getSettingsDirectory() const;
     juce::File getCatalogFile() const;
     juce::File getPathsFile() const;
     juce::File getDeadMansPedalFile() const;
+    juce::File getScannerStatusFile() const;
+    juce::File findScannerExecutable() const;
 
     LoadCallback loadCallback;
     CloseCallback closeCallback;
@@ -72,7 +70,7 @@ private:
 
     juce::TextEditor searchBox;
     juce::TextButton pathsButton { "PATHS" };
-    juce::TextButton scanButton { "SCAN" };
+    juce::TextButton scanButton { "SAFE SCAN" };
     juce::TextButton loadButton { "LOAD" };
     juce::TextButton closeButton { "CLOSE" };
     juce::ListBox resultList { "Plugin Browser", this };

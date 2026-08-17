@@ -2,118 +2,130 @@
 
 namespace gr
 {
+void RightGestureRuntime::clearCandidate() noexcept
+{
+    candidateGesture = ControlGesture::unknown;
+    candidateFrames = 0;
+}
+
 void RightGestureRuntime::reset() noexcept
 {
     armed = true;
-    missingFrameCount = 0;
-    currentGesture = ControlGesture::unknown;
-    previousGesture = ControlGesture::unknown;
+    acceptedGesture = ControlGesture::unknown;
     blockedGesture = ControlGesture::unknown;
+    missingFrames = 0;
+    clearCandidate();
 }
 
 void RightGestureRuntime::disarmForSlotChange() noexcept
 {
-    if (currentGesture == ControlGesture::unknown)
+    if (acceptedGesture == ControlGesture::unknown)
     {
         armed = true;
         blockedGesture = ControlGesture::unknown;
-        previousGesture = ControlGesture::unknown;
-        return;
     }
-
-    armed = false;
-    blockedGesture = currentGesture;
-    previousGesture = currentGesture;
+    else
+    {
+        armed = false;
+        blockedGesture = acceptedGesture;
+        // The old slot has already released its active mappings. Keep only the
+        // blocked gesture token so the new slot cannot inherit a held gesture.
+        acceptedGesture = ControlGesture::unknown;
+    }
+    clearCandidate();
+    missingFrames = 0;
 }
 
 RightGestureRuntimeFrame RightGestureRuntime::update (bool handPresent,
                                                       ControlGesture stableGesture) noexcept
 {
     RightGestureRuntimeFrame frame;
+    frame.armed = armed;
 
-    if (! handPresent)
+    if (! handPresent || stableGesture == ControlGesture::unknown)
     {
-        currentGesture = ControlGesture::unknown;
-        ++missingFrameCount;
-        if (missingFrameCount >= missingFramesBeforeReset)
+        ++missingFrames;
+        clearCandidate();
+        if (missingFrames >= releaseFrames && acceptedGesture != ControlGesture::unknown)
         {
-            if (previousGesture != ControlGesture::unknown)
-            {
-                frame.exited = true;
-                frame.exitedGesture = previousGesture;
-            }
-            reset();
+            frame.exited = true;
+            frame.exitedGesture = acceptedGesture;
+            acceptedGesture = ControlGesture::unknown;
+        }
+        if (missingFrames >= releaseFrames)
+        {
+            armed = true;
+            blockedGesture = ControlGesture::unknown;
         }
         frame.armed = armed;
         return frame;
     }
 
-    missingFrameCount = 0;
-    currentGesture = stableGesture;
+    missingFrames = 0;
 
     if (! armed)
     {
-        if (stableGesture == ControlGesture::unknown)
-        {
-            armed = true;
-            blockedGesture = ControlGesture::unknown;
-            previousGesture = ControlGesture::unknown;
-            frame.armed = true;
-            return frame;
-        }
-
         if (stableGesture == blockedGesture)
         {
-            frame.gesture = stableGesture;
+            frame.gesture = acceptedGesture;
             frame.armed = false;
             return frame;
         }
-
+        // Changing to a different gesture is allowed, but it still has to pass
+        // the same dwell filter before it can trigger.
         armed = true;
         blockedGesture = ControlGesture::unknown;
-        previousGesture = stableGesture;
-        frame.gesture = stableGesture;
-        frame.entered = true;
+        clearCandidate();
+    }
+
+    if (stableGesture == acceptedGesture && acceptedGesture != ControlGesture::unknown)
+    {
+        clearCandidate();
+        frame.gesture = acceptedGesture;
         frame.continuousActive = true;
         frame.armed = true;
         return frame;
     }
 
-    frame.armed = true;
-    frame.gesture = stableGesture;
-
-    if (stableGesture == ControlGesture::unknown)
+    if (candidateGesture != stableGesture)
     {
-        if (previousGesture != ControlGesture::unknown)
-        {
-            frame.exited = true;
-            frame.exitedGesture = previousGesture;
-        }
-        previousGesture = ControlGesture::unknown;
+        candidateGesture = stableGesture;
+        candidateFrames = 1;
+    }
+    else
+        ++candidateFrames;
+
+    const auto requiredFrames = acceptedGesture == ControlGesture::unknown ? enterFrames : switchFrames;
+    if (candidateFrames < requiredFrames)
+    {
+        // Hold the last accepted gesture during short classifier jitter instead
+        // of sending rapid enter/exit events to plugin parameters.
+        frame.gesture = acceptedGesture;
+        frame.continuousActive = acceptedGesture != ControlGesture::unknown;
+        frame.armed = true;
         return frame;
     }
 
-    frame.continuousActive = true;
-    if (stableGesture != previousGesture)
+    if (acceptedGesture != ControlGesture::unknown)
     {
-        if (previousGesture != ControlGesture::unknown)
-        {
-            frame.exited = true;
-            frame.exitedGesture = previousGesture;
-        }
-        frame.entered = true;
-        previousGesture = stableGesture;
+        frame.exited = true;
+        frame.exitedGesture = acceptedGesture;
     }
-
+    acceptedGesture = stableGesture;
+    clearCandidate();
+    frame.gesture = acceptedGesture;
+    frame.entered = true;
+    frame.continuousActive = true;
+    frame.armed = true;
     return frame;
 }
 
 void RightGestureRuntime::restoreArmingState (bool shouldBeArmed, ControlGesture blocked) noexcept
 {
     armed = shouldBeArmed;
-    missingFrameCount = 0;
+    acceptedGesture = ControlGesture::unknown;
     blockedGesture = shouldBeArmed ? ControlGesture::unknown : blocked;
-    currentGesture = ControlGesture::unknown;
-    previousGesture = shouldBeArmed ? ControlGesture::unknown : blocked;
+    missingFrames = 0;
+    clearCandidate();
 }
 }

@@ -8,30 +8,8 @@ constexpr auto slotTag = "SLOT";
 constexpr auto descriptionTag = "PLUGIN_DESCRIPTION";
 constexpr auto pluginStateTag = "PLUGIN_STATE";
 constexpr auto mappingsTag = "MAPPINGS";
-constexpr int currentStateVersion = 4;
+constexpr int currentStateVersion = 5;
 }
-
-class GestureRackAudioProcessor::ChildEditorWindow final : public juce::DocumentWindow
-{
-public:
-    ChildEditorWindow (int slotIndex, juce::String pluginName, juce::AudioProcessorEditor* editor)
-        : juce::DocumentWindow ("Slot " + juce::String (slotIndex + 1) + " - " + pluginName,
-                                juce::Colours::black,
-                                juce::DocumentWindow::closeButton)
-    {
-        setUsingNativeTitleBar (true);
-        setResizable (true, false);
-        ownedEditor.reset (editor);
-        setContentNonOwned (ownedEditor.get(), true);
-        centreWithSize (getWidth(), getHeight());
-        setVisible (true);
-    }
-
-    void closeButtonPressed() override { setVisible (false); }
-
-private:
-    std::unique_ptr<juce::AudioProcessorEditor> ownedEditor;
-};
 
 GestureRackAudioProcessor::GestureRackAudioProcessor()
     : juce::AudioProcessor (BusesProperties()
@@ -47,8 +25,6 @@ GestureRackAudioProcessor::GestureRackAudioProcessor()
     installDefaultMappingsForAllSlots();
     juce::addDefaultFormatsToManager (formatManager);
     graphManager.initialise (juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels()));
-    // 100 Hz control loop: halves the polling quantization vs 50 Hz (0-10 ms
-    // instead of 0-20 ms, ~5 ms average wait). CPU cost for this layer is tiny.
     startTimerHz (100);
 }
 
@@ -57,22 +33,24 @@ GestureRackAudioProcessor::~GestureRackAudioProcessor()
     aliveFlag->store (false, std::memory_order_release);
     stopTimer();
     parameterLearnManager.cancel();
+    mappingEngine.releaseAllActiveGestures();
     for (auto& generation : slotLoadGenerations)
         generation.fetch_add (1, std::memory_order_relaxed);
-    for (auto& window : childEditorWindows)
-        window.reset();
     graphManager.clear();
 }
 
 void GestureRackAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     prepared = true;
+    hostSampleRate.store (sampleRate, std::memory_order_relaxed);
+    hostBlockSize.store (samplesPerBlock, std::memory_order_relaxed);
+
     graph.setPlayConfigDetails (getTotalNumInputChannels(), getTotalNumOutputChannels(), sampleRate, samplesPerBlock);
     graph.setPlayHead (getPlayHead());
     graph.prepareToPlay (sampleRate, samplesPerBlock);
 
     juce::dsp::ProcessSpec spec { sampleRate,
-                                 static_cast<juce::uint32> (samplesPerBlock),
+                                 static_cast<juce::uint32> (juce::jmax (1, samplesPerBlock)),
                                  static_cast<juce::uint32> (juce::jmax (1, getTotalNumOutputChannels())) };
     hostBypassDelay.prepare (spec);
     hostBypassDelay.reset();
@@ -82,6 +60,7 @@ void GestureRackAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 void GestureRackAudioProcessor::releaseResources()
 {
     prepared = false;
+    mappingEngine.releaseAllActiveGestures();
     graph.releaseResources();
     hostBypassDelay.reset();
 }
@@ -117,15 +96,8 @@ void GestureRackAudioProcessor::timerCallback()
     constexpr auto controlDeltaSeconds = 1.0f / 100.0f;
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
-
-    // Separate "sidecar alive" (connected, 1500 ms) from "control fresh".
-    // A stalled vision engine can keep the socket warm while serving seconds-
-    // old frames; controlFresh refuses to keep driving parameters from a stale
-    // packet. Packet age beyond 300 ms resets the right-hand runtime and stops
-    // continuous mapping so the plugin does not freeze on the last value.
     const auto packetAgeMs = snapshot.receivedAtMs > 0
-        ? juce::Time::currentTimeMillis() - snapshot.receivedAtMs
-        : 1000000;
+        ? juce::Time::currentTimeMillis() - snapshot.receivedAtMs : 1000000;
     const auto controlFresh = connected && packetAgeMs >= 0 && packetAgeMs <= 300;
 
     if (! connected)
@@ -133,43 +105,36 @@ void GestureRackAudioProcessor::timerCallback()
         lastVisionStableSlot = 0;
         lastVisionSequence = 0;
         lastVisionSessionId.clear();
+        mappingEngine.releaseAllActiveGestures();
         rightRuntime.reset();
     }
     else
     {
-        // A session change means the VisionEngine restarted (seq resets to 1);
-        // treat that as a clean slate, not an out-of-order rollback. Within the
-        // same session, reject backwards/duplicate sequence as a real stale
-        // packet and reset the runtime.
         const auto sessionChanged = lastVisionSessionId.isNotEmpty()
                                  && snapshot.sessionId != lastVisionSessionId;
-        if (sessionChanged)
+        if (sessionChanged || snapshot.sequence < lastVisionSequence)
         {
             lastVisionStableSlot = 0;
             lastVisionSequence = 0;
-            rightRuntime.reset();
-        }
-        else if (snapshot.sequence < lastVisionSequence)
-        {
-            lastVisionStableSlot = 0;
+            mappingEngine.releaseAllActiveGestures();
             rightRuntime.reset();
         }
         lastVisionSequence = snapshot.sequence;
         lastVisionSessionId = snapshot.sessionId;
     }
 
-    // Stale control path: stop driving parameters from an old packet.
     if (connected && ! controlFresh)
+    {
+        mappingEngine.releaseAllActiveGestures();
         rightRuntime.reset();
+    }
 
     const auto enabled = gestureEnabled.load (std::memory_order_relaxed);
     if (enabled && controlFresh)
     {
         const auto stableSlot = snapshot.left.stableSlot;
-        if (snapshot.protocol >= 2
-            && snapshot.left.present
-            && stableSlot >= 1
-            && stableSlot <= 5
+        if (snapshot.protocol >= 2 && snapshot.left.present
+            && stableSlot >= 1 && stableSlot <= slotCount
             && stableSlot != lastVisionStableSlot)
         {
             lastVisionStableSlot = stableSlot;
@@ -178,8 +143,7 @@ void GestureRackAudioProcessor::timerCallback()
     }
 
     const auto liveRightGesture = controlFresh && snapshot.right.present
-        ? snapshot.right.stableGesture
-        : gr::ControlGesture::unknown;
+        ? snapshot.right.stableGesture : gr::ControlGesture::unknown;
     const auto runtimeFrame = rightRuntime.update (controlFresh && snapshot.right.present,
                                                    liveRightGesture);
 
@@ -187,17 +151,17 @@ void GestureRackAudioProcessor::timerCallback()
     if (enabled && controlFresh && ! testing)
     {
         const auto slotIndex = getSelectedSlot();
+        if (runtimeFrame.exited && runtimeFrame.exitedGesture != gr::ControlGesture::unknown)
+            mappingEngine.triggerGestureExited (slotIndex, runtimeFrame.exitedGesture);
+
         if (runtimeFrame.entered && runtimeFrame.gesture != gr::ControlGesture::unknown)
         {
             mappingEngine.triggerGestureEntered (slotIndex, runtimeFrame.gesture);
             updateMappingStatus ("LIVE ENTER: " + gr::controlGestureToString (runtimeFrame.gesture));
         }
-
         if (runtimeFrame.continuousActive && runtimeFrame.gesture != gr::ControlGesture::unknown)
-            mappingEngine.processContinuous (slotIndex,
-                                             runtimeFrame.gesture,
-                                             snapshot.right.height,
-                                             controlDeltaSeconds);
+            mappingEngine.processContinuous (slotIndex, runtimeFrame.gesture,
+                                             snapshot.right.height, controlDeltaSeconds);
     }
 
     if (testing)
@@ -225,10 +189,10 @@ void GestureRackAudioProcessor::setSelectedSlot (int slotIndex) noexcept
 {
     if (! isValidSlotIndex (slotIndex))
         return;
-
     const auto previous = selectedSlot.exchange (slotIndex, std::memory_order_relaxed);
     if (previous != slotIndex)
     {
+        mappingEngine.releaseAllActiveGestures();
         rightRuntime.disarmForSlotChange();
         testSignalEnabled.store (false, std::memory_order_relaxed);
         parameterLearnManager.cancel();
@@ -239,7 +203,10 @@ void GestureRackAudioProcessor::setGestureEnabled (bool enabled) noexcept
 {
     const auto previous = gestureEnabled.exchange (enabled, std::memory_order_relaxed);
     if (previous != enabled)
+    {
+        mappingEngine.releaseAllActiveGestures();
         rightRuntime.disarmForSlotChange();
+    }
 }
 
 bool GestureRackAudioProcessor::isSlotLoaded (int slotIndex) const noexcept
@@ -274,15 +241,38 @@ int GestureRackAudioProcessor::getSlotMappingCount (int slotIndex) const
         ? static_cast<int> (slots[static_cast<size_t> (slotIndex)]->getMappings().size()) : 0;
 }
 
+juce::AudioProcessorEditor* GestureRackAudioProcessor::getOrCreateSlotEditor (int slotIndex)
+{
+    if (! isValidSlotIndex (slotIndex))
+        return nullptr;
+    if (auto* wrapper = slots[static_cast<size_t> (slotIndex)]->getWrapper())
+        return wrapper->getOrCreateEmbeddedEditor();
+    return nullptr;
+}
+
+bool GestureRackAudioProcessor::slotHasNativeEditor (int slotIndex) const noexcept
+{
+    if (! isValidSlotIndex (slotIndex))
+        return false;
+    if (auto* wrapper = slots[static_cast<size_t> (slotIndex)]->getWrapper())
+        return wrapper->hasChildEditor();
+    return false;
+}
+
+uintptr_t GestureRackAudioProcessor::getSlotChildIdentity (int slotIndex) const noexcept
+{
+    if (! isValidSlotIndex (slotIndex))
+        return 0;
+    return reinterpret_cast<uintptr_t> (slots[static_cast<size_t> (slotIndex)]->getChild());
+}
+
 int GestureRackAudioProcessor::getLiveMappingCount() const
 {
     const auto gesture = isTestSignalEnabled() ? getTestGesture()
-                                               : (rightRuntime.isArmed()
-                                                    ? rightRuntime.getCurrentGesture()
-                                                    : gr::ControlGesture::unknown);
+                                               : (rightRuntime.isArmed() ? rightRuntime.getCurrentGesture()
+                                                                         : gr::ControlGesture::unknown);
     if (gesture == gr::ControlGesture::unknown)
         return 0;
-
     const auto mappings = getSlotMappings (getSelectedSlot());
     return static_cast<int> (std::count_if (mappings.begin(), mappings.end(), [gesture] (const gr::GestureBinding& binding)
     {
@@ -294,25 +284,20 @@ juce::String GestureRackAudioProcessor::getGestureRuntimeStatus() const
 {
     if (isTestSignalEnabled())
         return "TEST " + gr::controlGestureToString (getTestGesture()).toUpperCase();
-
     if (! isVisionConnected())
         return "VISION OFFLINE";
-
     if (! rightRuntime.isArmed())
     {
         const auto blocked = rightRuntime.getBlockedGesture();
         return "RE-ARM: RELEASE / CHANGE "
-             + (blocked == gr::ControlGesture::unknown
-                    ? juce::String ("GESTURE")
-                    : gr::controlGestureToString (blocked).toUpperCase());
+             + (blocked == gr::ControlGesture::unknown ? juce::String ("GESTURE")
+                                                       : gr::controlGestureToString (blocked).toUpperCase());
     }
-
     const auto gesture = rightRuntime.getCurrentGesture();
     if (gesture == gr::ControlGesture::unknown)
         return "RIGHT READY";
-
     return "LIVE " + gr::controlGestureToString (gesture).toUpperCase()
-         + "  |  " + juce::String (getLiveMappingCount()) + " MAPS";
+         + "  |  " + juce::String (getLiveMappingCount()) + " MAP";
 }
 
 std::vector<gr::ParameterDescriptor> GestureRackAudioProcessor::getSlotParameters (int slotIndex) const
@@ -404,17 +389,12 @@ void GestureRackAudioProcessor::installDefaultMappingsForSlot (int slotIndex)
 {
     if (! isValidSlotIndex (slotIndex))
         return;
-
     juce::String ignored;
-    mappingEngine.addSlotActionBinding (slotIndex,
-                                        gr::ControlGesture::openPalm,
-                                        gr::MappingMode::triggerSetActive,
-                                        ignored);
+    mappingEngine.addSlotActionBinding (slotIndex, gr::ControlGesture::openPalm,
+                                        gr::MappingMode::triggerSetActive, ignored);
     ignored.clear();
-    mappingEngine.addSlotActionBinding (slotIndex,
-                                        gr::ControlGesture::closedFist,
-                                        gr::MappingMode::triggerSetBypassed,
-                                        ignored);
+    mappingEngine.addSlotActionBinding (slotIndex, gr::ControlGesture::closedFist,
+                                        gr::MappingMode::triggerSetBypassed, ignored);
 }
 
 void GestureRackAudioProcessor::installDefaultMappingsForAllSlots()
@@ -423,15 +403,36 @@ void GestureRackAudioProcessor::installDefaultMappingsForAllSlots()
         installDefaultMappingsForSlot (slotIndex);
 }
 
+juce::File GestureRackAudioProcessor::getPluginCatalogFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+        .getChildFile ("GestureRack").getChildFile ("plugin_catalog.xml");
+}
+
+std::optional<juce::PluginDescription> GestureRackAudioProcessor::findCatalogDescriptionForFile (const juce::File& file) const
+{
+    const auto catalogFile = getPluginCatalogFile();
+    if (! catalogFile.existsAsFile())
+        return std::nullopt;
+    auto xml = juce::XmlDocument::parse (catalogFile);
+    if (xml == nullptr)
+        return std::nullopt;
+    juce::KnownPluginList list;
+    list.recreateFromXml (*xml);
+    const auto wanted = file.getFullPathName();
+    for (const auto& description : list.getTypes())
+    {
+        const auto candidate = juce::File (description.fileOrIdentifier).getFullPathName();
+        if (candidate.equalsIgnoreCase (wanted))
+            return description;
+    }
+    return std::nullopt;
+}
+
 void GestureRackAudioProcessor::loadVst3FromFile (int slotIndex, const juce::File& file)
 {
     if (! isValidSlotIndex (slotIndex))
         return;
-
-    parameterLearnManager.cancelIfSlot (slotIndex);
-    if (slotIndex == getSelectedSlot())
-        testSignalEnabled.store (false, std::memory_order_relaxed);
-
     auto& slot = *slots[static_cast<size_t> (slotIndex)];
     slot.clearLastError();
     if (! file.exists())
@@ -445,22 +446,12 @@ void GestureRackAudioProcessor::loadVst3FromFile (int slotIndex, const juce::Fil
         return;
     }
 
-    juce::OwnedArray<juce::PluginDescription> found;
-    for (auto* format : formatManager.getFormats())
-    {
-        if (format == nullptr || format->getName() != "VST3")
-            continue;
-        if (! format->fileMightContainThisPluginType (file.getFullPathName()))
-            continue;
-        knownPlugins.scanAndAddFile (file.getFullPathName(), false, found, *format);
-        break;
-    }
-    if (found.isEmpty())
-    {
-        slot.setLastError ("No loadable VST3 type was found in that file/bundle.");
-        return;
-    }
-    loadDescriptionAsync (slotIndex, *found[0], nullptr);
+    // Never probe unknown third-party binaries inside the DAW process. File drag
+    // only resolves descriptions that the isolated scanner has already verified.
+    if (const auto description = findCatalogDescriptionForFile (file); description.has_value())
+        loadPluginDescription (slotIndex, *description);
+    else
+        slot.setLastError ("Not in safe plugin catalog. Add its folder in PLUGINS and run SAFE SCAN first.");
 }
 
 void GestureRackAudioProcessor::loadDescriptionAsync (int slotIndex,
@@ -469,7 +460,6 @@ void GestureRackAudioProcessor::loadDescriptionAsync (int slotIndex,
 {
     if (! isValidSlotIndex (slotIndex))
         return;
-
     const auto index = static_cast<size_t> (slotIndex);
     const auto generation = slotLoadGenerations[index].fetch_add (1, std::memory_order_relaxed) + 1;
     const auto sampleRate = getSampleRate() > 0.0 ? getSampleRate() : 44100.0;
@@ -504,7 +494,6 @@ void GestureRackAudioProcessor::installChild (int slotIndex,
 {
     if (! isValidSlotIndex (slotIndex))
         return;
-
     const auto index = static_cast<size_t> (slotIndex);
     auto& slot = *slots[index];
     if (slotLoadGenerations[index].load (std::memory_order_relaxed) != loadGeneration)
@@ -521,13 +510,11 @@ void GestureRackAudioProcessor::installChild (int slotIndex,
         slot.setLastError ("The hosted plugin does not support the current mono/stereo bus layout.");
         return;
     }
-
     instance->setPlayHead (getPlayHead());
     if (restoredState != nullptr && restoredState->getSize() > 0)
         instance->setStateInformation (restoredState->getData(), static_cast<int> (restoredState->getSize()));
 
     parameterLearnManager.cancelIfSlot (slotIndex);
-    childEditorWindows[index].reset();
     if (const auto& oldDescription = slot.getDescription(); oldDescription.has_value())
         if (! oldDescription->matchesIdentifierString (description.createIdentifierString()))
             mappingEngine.clearChildParameterMappings (slotIndex);
@@ -550,11 +537,10 @@ void GestureRackAudioProcessor::removeSlotPlugin (int slotIndex)
 {
     if (! isValidSlotIndex (slotIndex))
         return;
-
     const auto index = static_cast<size_t> (slotIndex);
     parameterLearnManager.cancelIfSlot (slotIndex);
+    mappingEngine.releaseAllActiveGestures();
     slotLoadGenerations[index].fetch_add (1, std::memory_order_relaxed);
-    childEditorWindows[index].reset();
     graphManager.removeSlotProcessor (slotIndex, juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels()));
     mappingEngine.clearChildParameterMappings (slotIndex);
 
@@ -565,33 +551,6 @@ void GestureRackAudioProcessor::removeSlotPlugin (int slotIndex)
     if (slotIndex == getSelectedSlot())
         testSignalEnabled.store (false, std::memory_order_relaxed);
     updateTotalLatency();
-}
-
-void GestureRackAudioProcessor::openChildEditor (int slotIndex)
-{
-    if (! isValidSlotIndex (slotIndex))
-        return;
-    const auto index = static_cast<size_t> (slotIndex);
-    auto& slot = *slots[index];
-    auto* child = slot.getChild();
-    if (child == nullptr || ! child->hasEditor())
-    {
-        slot.setLastError ("The hosted plugin has no editor.");
-        return;
-    }
-    if (childEditorWindows[index] != nullptr)
-    {
-        childEditorWindows[index]->setVisible (true);
-        childEditorWindows[index]->toFront (true);
-        return;
-    }
-    if (auto* editor = child->createEditorIfNeeded())
-    {
-        childEditorWindows[index] = std::make_unique<ChildEditorWindow> (slotIndex, slot.getPluginName(), editor);
-        slot.clearLastError();
-    }
-    else
-        slot.setLastError ("The hosted plugin could not create its editor.");
 }
 
 void GestureRackAudioProcessor::updateTotalLatency()
@@ -613,8 +572,7 @@ void GestureRackAudioProcessor::getStateInformation (juce::MemoryBlock& destData
     root.setAttribute ("gestureEnabled", gestureEnabled.load (std::memory_order_relaxed));
     root.setAttribute ("selectedSlot", getSelectedSlot());
     root.setAttribute ("rightControllerArmed", rightRuntime.isArmed());
-    root.setAttribute ("rightBlockedGesture",
-                       gr::controlGestureToString (rightRuntime.getBlockedGesture()));
+    root.setAttribute ("rightBlockedGesture", gr::controlGestureToString (rightRuntime.getBlockedGesture()));
 
     for (int slotIndex = 0; slotIndex < slotCount; ++slotIndex)
     {
@@ -648,6 +606,7 @@ void GestureRackAudioProcessor::clearRackForStateRestore()
 {
     parameterLearnManager.cancel();
     testSignalEnabled.store (false, std::memory_order_relaxed);
+    mappingEngine.releaseAllActiveGestures();
     rightRuntime.reset();
     lastVisionStableSlot = 0;
     lastVisionSequence = 0;
@@ -655,9 +614,6 @@ void GestureRackAudioProcessor::clearRackForStateRestore()
 
     for (auto& generation : slotLoadGenerations)
         generation.fetch_add (1, std::memory_order_relaxed);
-    for (auto& window : childEditorWindows)
-        window.reset();
-
     graphManager.removeAllSlotProcessors (juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels()));
     for (int slotIndex = 0; slotIndex < slotCount; ++slotIndex)
     {
@@ -675,7 +631,6 @@ void GestureRackAudioProcessor::restoreSlotFromXml (const juce::XmlElement& slot
     const auto slotIndex = slotXml.getIntAttribute ("index", -1);
     if (! isValidSlotIndex (slotIndex))
         return;
-
     auto& slot = *slots[static_cast<size_t> (slotIndex)];
     slot.setBypassed (slotXml.getBoolAttribute ("bypassed", false));
 
@@ -686,6 +641,12 @@ void GestureRackAudioProcessor::restoreSlotFromXml (const juce::XmlElement& slot
                 if (auto binding = gr::GestureBinding::fromXml (*bindingXml); binding.has_value())
                 {
                     binding->slotIndex = slotIndex;
+                    // Old projects could contain many targets for one gesture. Preserve
+                    // deterministic product semantics by keeping the last saved binding.
+                    juce::String ignored;
+                    for (const auto& existing : slot.getMappings())
+                        if (existing.sourceGesture == binding->sourceGesture)
+                            slot.removeMapping (existing.id);
                     slot.addMapping (*binding);
                 }
 
@@ -717,7 +678,6 @@ void GestureRackAudioProcessor::restoreLegacySingleSlotState (const juce::XmlEle
     juce::PluginDescription description;
     if (! description.loadFromXml (*descClone))
         return;
-
     auto restoredState = std::make_shared<juce::MemoryBlock>();
     if (auto* stateXml = root.getChildByName (pluginStateTag))
         restoredState->fromBase64Encoding (stateXml->getAllSubText());
@@ -768,9 +728,7 @@ void GestureRackAudioProcessor::setStateInformation (const void* data, int sizeI
             rightRuntime.restoreArmingState (armed, blocked);
         }
         else
-        {
             rightRuntime.reset();
-        }
     });
 }
 

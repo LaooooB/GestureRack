@@ -18,8 +18,6 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
-    // Primary product interaction: drag a gesture from the single gesture palette
-    // in PluginEditor and drop it directly on an automatable parameter row.
     bool dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint);
     void setGestureDragPreview (ControlGesture gesture, juce::Point<int> localPoint);
     void clearGestureDragPreview();
@@ -39,11 +37,10 @@ private:
 
     juce::String describeBinding (const GestureBinding& binding) const;
     juce::String gestureBadgesForParameter (const ParameterDescriptor& descriptor) const;
-    int getMappingCountForParameter (const ParameterDescriptor& descriptor) const;
     bool isParameterMappingResolved (const GestureBinding& binding) const;
+    const ParameterDescriptor* descriptorForBinding (const GestureBinding& binding) const;
 
     GestureRackAudioProcessor& processor;
-
     std::unique_ptr<ParameterListModel> parameterModel;
     std::unique_ptr<MappingListModel> mappingModel;
     juce::ListBox parameterList;
@@ -53,8 +50,10 @@ private:
     juce::Label statusLabel;
     juce::TextButton advancedButton { "ADVANCED" };
 
+    juce::ComboBox behaviorBox;
     juce::Slider minSlider;
     juce::Slider maxSlider;
+    juce::Slider curveSlider;
     juce::Slider smoothingSlider;
     juce::Slider deadbandSlider;
     juce::ToggleButton invertButton { "INVERT" };
@@ -72,6 +71,7 @@ private:
     int lastSlot = -1;
     juce::String lastPluginName;
     bool advancedExpanded = false;
+    bool loadingControls = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParameterInspector)
 };
