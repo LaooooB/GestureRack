@@ -5,14 +5,15 @@ from typing import Optional
 import math
 import time
 
+from gesture_dataset import gesture_label_to_family
 from tiny_landmark_classifier import TinyGesturePrediction
 
 
 @dataclass(frozen=True)
 class ShadowObservation:
     available: bool = False
-    heuristic_gesture: str = "None"
-    model_gesture: str = "None"
+    heuristic_gesture: str = "Other"  # family name; field kept for wire compatibility
+    model_gesture: str = "Other"      # family name; field kept for wire compatibility
     confidence: float = 0.0
     margin: float = 0.0
     inference_ms: float = 0.0
@@ -48,21 +49,15 @@ class ShadowStats:
 
     @property
     def disagreement_rate(self) -> float:
-        if self.samples <= 0:
-            return 0.0
-        return self.disagreements / self.samples
+        return 0.0 if self.samples <= 0 else self.disagreements / self.samples
 
     @property
     def agreement_rate(self) -> float:
-        if self.samples <= 0:
-            return 0.0
-        return 1.0 - self.disagreement_rate
+        return 0.0 if self.samples <= 0 else 1.0 - self.disagreement_rate
 
     @property
     def mean_inference_ms(self) -> float:
-        if self.samples <= 0:
-            return 0.0
-        return self.inference_ms_total / self.samples
+        return 0.0 if self.samples <= 0 else self.inference_ms_total / self.samples
 
     @staticmethod
     def _percentile(values: list[float], quantile: float) -> float:
@@ -93,7 +88,12 @@ class ShadowStats:
 
 
 class ShadowGestureEvaluator:
-    """Run a tiny landmark model beside production classification without control authority."""
+    """Compare a learned broad-family model with production family inference.
+
+    The learned model intentionally has no authority over final thumb direction.
+    This keeps shadow metrics meaningful after moving direction to deterministic
+    geometry.
+    """
 
     def __init__(self, model=None):
         self.model = model
@@ -108,8 +108,9 @@ class ShadowGestureEvaluator:
 
     def evaluate(self, normalized_landmarks, heuristic_gesture: str,
                  world_landmarks=None) -> ShadowObservation:
+        heuristic_family = gesture_label_to_family(heuristic_gesture)
         if self.model is None:
-            return ShadowObservation(heuristic_gesture=str(heuristic_gesture))
+            return ShadowObservation(heuristic_gesture=heuristic_family)
 
         started_ns = time.perf_counter_ns()
         prediction: Optional[TinyGesturePrediction]
@@ -120,12 +121,16 @@ class ShadowGestureEvaluator:
         elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
 
         if prediction is None:
-            prediction = TinyGesturePrediction()
+            prediction = TinyGesturePrediction("Other", 0.0, 0.0)
+
+        model_family = str(prediction.gesture)
+        if model_family not in {"OpenPalm", "FoldedFour", "Victory", "Other"}:
+            model_family = "Other"
 
         observation = ShadowObservation(
             available=True,
-            heuristic_gesture=str(heuristic_gesture),
-            model_gesture=str(prediction.gesture),
+            heuristic_gesture=heuristic_family,
+            model_gesture=model_family,
             confidence=float(prediction.confidence),
             margin=float(prediction.margin),
             inference_ms=max(0.0, float(elapsed_ms)),
