@@ -36,7 +36,14 @@ RightGestureRuntimeFrame RightGestureRuntime::update (bool handPresent,
         currentGesture = ControlGesture::unknown;
         ++missingFrameCount;
         if (missingFrameCount >= missingFramesBeforeReset)
+        {
+            if (previousGesture != ControlGesture::unknown)
+            {
+                frame.exited = true;
+                frame.exitedGesture = previousGesture;
+            }
             reset();
+        }
         frame.armed = armed;
         return frame;
     }
@@ -77,6 +84,11 @@ RightGestureRuntimeFrame RightGestureRuntime::update (bool handPresent,
 
     if (stableGesture == ControlGesture::unknown)
     {
+        if (previousGesture != ControlGesture::unknown)
+        {
+            frame.exited = true;
+            frame.exitedGesture = previousGesture;
+        }
         previousGesture = ControlGesture::unknown;
         return frame;
     }
@@ -84,6 +96,11 @@ RightGestureRuntimeFrame RightGestureRuntime::update (bool handPresent,
     frame.continuousActive = true;
     if (stableGesture != previousGesture)
     {
+        if (previousGesture != ControlGesture::unknown)
+        {
+            frame.exited = true;
+            frame.exitedGesture = previousGesture;
+        }
         frame.entered = true;
         previousGesture = stableGesture;
     }
