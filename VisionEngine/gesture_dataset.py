@@ -15,9 +15,21 @@ from landmark_features import FEATURE_VERSION, extract_landmark_features
 from right_gesture_classifier import RIGHT_GESTURES, RightGestureClassification
 
 
-DATASET_SCHEMA_VERSION = 1
+DATASET_SCHEMA_VERSION = 2
 RIGHT_DATASET_LABELS = tuple(sorted(RIGHT_GESTURES)) + ("None",)
+RIGHT_FAMILY_LABELS = ("OpenPalm", "FoldedFour", "Victory", "Other")
 _SAFE_LABEL = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def gesture_label_to_family(label: str) -> str:
+    canonical = str(label).strip()
+    if canonical == "Open_Palm":
+        return "OpenPalm"
+    if canonical == "Victory":
+        return "Victory"
+    if canonical == "Closed_Fist" or canonical.startswith("Thumb_"):
+        return "FoldedFour"
+    return "Other"
 
 
 def default_dataset_dir() -> Path:
@@ -40,13 +52,11 @@ class DatasetRecorderStatus:
 
 
 class GestureDatasetRecorder:
-    """Record resolved physical-right samples from the exact production pipeline.
+    """Record exact production physical-right samples for offline training.
 
-    Recording happens after physical-role resolution and preserves raw landmarks,
-    world landmarks, MediaPipe canned output, the current heuristic output, and
-    the exact 81-float feature vector used by the future tiny classifier. This
-    avoids training on a separate camera path that behaves differently from the
-    shipping plugin.
+    Labels remain user-facing final gestures so the dataset can measure direction
+    and Fist/Thumb confusion. The learned tiny model deliberately trains on the
+    derived broad family label instead of final direction classes.
     """
 
     def __init__(self, directory: Optional[Path] = None, min_interval_ms: int = 50):
@@ -132,8 +142,10 @@ class GestureDatasetRecorder:
                 "feature_version": FEATURE_VERSION,
                 "timestamp_ms": now,
                 "label": self.label,
+                "family_label": gesture_label_to_family(self.label),
                 "physical_role": "right",
                 "session_id": self.metadata.get("session_id", ""),
+                "recording_group": self.metadata.get("recording_group", ""),
                 "camera": {
                     "index": self.metadata.get("camera_index", 0),
                     "backend": self.metadata.get("backend", ""),
@@ -150,7 +162,13 @@ class GestureDatasetRecorder:
                 },
                 "heuristic": {
                     "gesture": classification.gesture,
+                    "family": classification.family,
                     "confidence": float(classification.confidence),
+                    "family_confidence": float(classification.family_confidence),
+                    "thumb_state": classification.thumb_state,
+                    "direction": classification.direction,
+                    "direction_confidence": float(classification.direction_confidence),
+                    "quality": float(classification.quality),
                 },
                 "used_world_landmarks": bool(feature.used_world_landmarks),
                 "normalized_landmarks": hand.landmarks,
