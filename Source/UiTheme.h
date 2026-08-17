@@ -6,18 +6,20 @@
 namespace gr::ui
 {
 // Pantone 17-5104 Ultimate Gray / Pantone 13-0647 Illuminating inspired UI palette.
-inline const juce::Colour canvas      { 0xff101111 };
-inline const juce::Colour workspace   { 0xff151616 };
-inline const juce::Colour surface     { 0xff1c1d1e };
-inline const juce::Colour surfaceHigh { 0xff252627 };
-inline const juce::Colour control     { 0xff2e3031 };
-inline const juce::Colour border      { 0xff4b4d4e };
-inline const juce::Colour gray        { 0xff939597 };
-inline const juce::Colour text        { 0xffe8e8e4 };
-inline const juce::Colour textMuted   { 0xff9a9b99 };
+// Keep the workspace very dark and typography deliberately high-contrast: Gesture Rack is
+// intended to be used as the primary work surface, often on large/high-DPI displays.
+inline const juce::Colour canvas      { 0xff0c0d0d };
+inline const juce::Colour workspace   { 0xff111212 };
+inline const juce::Colour surface     { 0xff181919 };
+inline const juce::Colour surfaceHigh { 0xff242525 };
+inline const juce::Colour control     { 0xff303232 };
+inline const juce::Colour border      { 0xff626462 };
+inline const juce::Colour gray        { 0xffaeb0ac };
+inline const juce::Colour text        { 0xfff7f7f2 };
+inline const juce::Colour textMuted   { 0xffc6c7c2 };
 inline const juce::Colour accent      { 0xfff5df4d };
-inline const juce::Colour shadow      { 0x52000000 };
-inline const juce::Colour viewport    { 0xff0c0d0d };
+inline const juce::Colour shadow      { 0x62000000 };
+inline const juce::Colour viewport    { 0xff080909 };
 
 constexpr int micro = 4;
 constexpr int small = 8;
@@ -27,24 +29,33 @@ constexpr int major = 24;
 constexpr float panelRadius = 11.0f;
 constexpr float controlRadius = 6.0f;
 
+// Verdana has a large x-height and strong hinting at the small sizes used by audio tools.
 inline juce::String fontFamily()
 {
-   #if JUCE_WINDOWS
-    return "Segoe UI";
-   #else
-    return juce::Font::getDefaultSansSerifFontName();
-   #endif
+    return "Verdana";
 }
+
+constexpr float fontScale = 1.18f;
+constexpr float minimumReadableFontHeight = 11.0f;
+constexpr float smallBoldThreshold = 14.0f;
 
 inline juce::Font font (float height, int style = juce::Font::plain)
 {
-    return juce::Font (juce::FontOptions (fontFamily(), height, style));
+    const auto readableHeight = juce::jmax (minimumReadableFontHeight, height * fontScale);
+
+    // Small Verdana Bold is dense and harder to scan. Keep control/meta text regular and
+    // reserve Bold for true hierarchy such as section and application titles.
+    auto readableStyle = style;
+    if (readableHeight < smallBoldThreshold && (readableStyle & juce::Font::bold) != 0)
+        readableStyle &= ~juce::Font::bold;
+
+    return juce::Font (juce::FontOptions (fontFamily(), readableHeight, readableStyle));
 }
 
 inline juce::Font titleFont()   { return font (21.0f, juce::Font::bold); }
 inline juce::Font sectionFont() { return font (13.5f, juce::Font::bold); }
-inline juce::Font controlFont() { return font (10.5f, juce::Font::bold); }
-inline juce::Font metaFont()    { return font (9.0f, juce::Font::plain); }
+inline juce::Font controlFont() { return font (10.8f, juce::Font::plain); }
+inline juce::Font metaFont()    { return font (9.4f, juce::Font::plain); }
 
 inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> bounds, bool elevated = false)
 {
@@ -57,7 +68,7 @@ inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> bounds, bool el
     }
     g.setColour (surface);
     g.fillRoundedRectangle (bounds, panelRadius);
-    g.setColour (border.withAlpha (0.62f));
+    g.setColour (border.withAlpha (0.78f));
     g.drawRoundedRectangle (bounds.reduced (0.5f), panelRadius, 1.0f);
 }
 
@@ -117,11 +128,11 @@ public:
 
         g.setColour (isEnabled() ? fill : surfaceHigh.withAlpha (0.45f));
         g.fillRoundedRectangle (b, controlRadius);
-        g.setColour (isEnabled() ? blend (border, accent, focus) : border.withAlpha (0.28f));
+        g.setColour (isEnabled() ? blend (border, accent, focus) : border.withAlpha (0.42f));
         g.drawRoundedRectangle (b, controlRadius, 1.0f);
 
         g.setColour (isEnabled() ? (selected ? accent : findColour (juce::TextButton::textColourOffId))
-                                 : textMuted.withAlpha (0.45f));
+                                 : textMuted.withAlpha (0.58f));
         g.setFont (controlFont());
         g.drawFittedText (getButtonText(), getLocalBounds().reduced (7, 2), juce::Justification::centred, 1);
     }
