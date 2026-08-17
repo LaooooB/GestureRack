@@ -23,21 +23,34 @@ Gesture Rack — Windows 快速开始
 - 如果结果仍然反了，可以点击 SWAP L/R 手动切换。
 - 左手 1–5 选择对应 Rack Slot；6–9 当前仍可用鼠标选择。
 
+右手控制手势：
+- PALM：自然张开手掌。
+- FIST：四指收起并把拇指自然收住。
+- VICTORY：食指和中指伸出。
+- UP / DOWN / LEFT / RIGHT：四指保持收起，只伸出拇指并让拇指明确朝对应方向。
+- LEFT / RIGHT 已经不是食指 Point 手势。旧工程里保存的 Point Left/Right 映射会自动兼容到新的 Thumb Left/Right。
+
 参数映射最简单的方式：
 1. 在界面上方找到 RIGHT-HAND / GESTURE SOURCES 区域。
 2. 用鼠标按住一个右手手势，例如 PALM / FIST / VICTORY / UP / DOWN / LEFT / RIGHT。
 3. 把这个手势直接拖到下面某一个参数行上。
-4. 参数行右侧出现手势图标后，就表示已经 ASSIGNED。
-5. 实际做出这个右手手势并保持，然后抬高手掌会提高参数，放低手掌会降低参数。
+4. 参数行右侧出现手势标记后，就表示已经 ASSIGNED。
+5. 对连续参数：实际做出这个右手手势并保持，然后抬高手掌会提高参数，放低手掌会降低参数。
 
 默认 Parameter 面板只显示最重要的内容，避免第一次打开就看到一堆工程参数。
 需要修改 MIN / MAX / INVERT / smoothing / deadband 或删除映射时，再点 ADVANCED。
-白色面板内的文字使用深色显示。
 
 摄像头和手势点线：
-- Gesture Rack 插件内部现在会显示真实摄像头画面。
+- Gesture Rack 插件内部会显示真实摄像头画面。
 - 左右手的 21 个 MediaPipe landmark 点和骨骼连线会直接叠加在同一帧画面上。
 - 如果显示的物理 LEFT / RIGHT 不正确，请重新 CALIBRATE RIGHT。
+
+新的识别逻辑：
+- 系统先识别大类手型，再单独判断 Fist / Thumb，避免拳头和拇指手势直接互相抢分类。
+- Thumb Up/Down/Left/Right 的方向由拇指 landmark 向量计算，不依赖最终手势 AI 猜方向。
+- 半伸拇指、斜对角方向、质量太差的手部几何会优先判为未知，不会强行触发一个控制。
+- 明确、高置信度的动作可以快速进入；Fist 与 Thumb 的高风险切换会要求更多证据。
+- 连续的手掌高度控制走独立 One Euro Filter，不会因为离散手势的稳定时间变慢。
 
 摄像头或识别异常：
 - 关闭其他正在占用摄像头的软件后重新启动 GestureVisionEngine.exe。
@@ -47,11 +60,14 @@ Gesture Rack — Windows 快速开始
 手势识别数据采集（可选，开发/优化识别准确率时使用）：
 - 保持 GestureVisionEngine.exe 正常运行并先完成 CALIBRATE RIGHT。
 - 再双击 GestureDataCollector.exe。
-- 程序会依次让你录制 None hard-negative、Open Palm、Fist、Victory、Thumb Up/Down、Point Left/Right。
+- 程序会依次让你录制：None hard-negative、Open Palm、Fist、Victory、Thumb Up、Thumb Down、Thumb Left、Thumb Right。
+- None 不代表“没有手”。请专门录半成型手势、Fist↔Thumb 过渡、半伸拇指、斜对角拇指、放松手、画面边缘和其他容易误触的姿势。
 - 每一轮请主动改变距离、手在画面中的位置、手腕角度和灯光。
-- 至少录制两轮完整 session，而且两轮条件要有明显变化，才允许进入 tiny classifier promotion 流程。
+- 至少录制两轮完整 recording group，而且两轮条件要有明显变化，才允许进入 tiny classifier promotion 流程。
 
 开发/诊断说明：
-- 正常发行包默认不启用 tiny learned classifier 的 authoritative control；当前 heuristic/canned fusion 仍然控制插件。
+- 正常发行包里，生产控制路径使用分层几何识别 + 时间稳定器；MediaPipe canned gesture 只作为弱辅助证据。
+- tiny learned classifier 现在只学习 OpenPalm / FoldedFour / Victory / Other 四个 Shape Family，并保持 shadow-only，除非独立 recording group 的 held-out 数据证明它确实更好。
+- Thumb 的上下左右方向不会交给 tiny model 学，仍由确定性方向解析器负责。
 - GestureDataCollector.exe 只监听已经运行的 production VisionEngine 数据，不会再打开第二个摄像头。
 - GestureVisionEngine.exe 关闭后，Rack 会显示 VISION OFFLINE，但音频插件本身仍可加载。
