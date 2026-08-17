@@ -31,11 +31,11 @@ jobs:
 
       - name: Compile-check vision entrypoints
         working-directory: VisionEngine
-        run: python -m py_compile vision_engine.py shadow_monitor.py collect_runtime_dataset.py collect_gesture_session.py analyze_gesture_dataset.py train_tiny_classifier.py
+        run: python -m py_compile vision_engine.py shadow_monitor.py collect_runtime_dataset.py collect_gesture_session.py analyze_gesture_dataset.py gesture_event_metrics.py train_tiny_classifier.py
 
       - name: Run vision regression tests
         working-directory: VisionEngine
-        run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py test_landmark_features.py test_gesture_dataset.py test_tiny_landmark_classifier.py test_shadow_evaluator.py test_training_dataset_quality.py test_analyze_gesture_dataset.py
+        run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py test_landmark_features.py test_gesture_dataset.py test_tiny_landmark_classifier.py test_shadow_evaluator.py test_training_dataset_quality.py test_analyze_gesture_dataset.py test_gesture_event_metrics.py
 
       - name: Download bundled MediaPipe gesture model
         working-directory: VisionEngine
