@@ -1,5 +1,8 @@
 #include "PluginBrowser.h"
 #include <algorithm>
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
 
 namespace
 {
@@ -263,6 +266,30 @@ void PluginBrowserComponent::startScan (bool clearBlacklist)
 
 juce::File PluginBrowserComponent::findScannerExecutable() const
 {
+   #if JUCE_WINDOWS
+    // In a VST3, currentExecutableFile is the DAW executable. Resolve the DLL
+    // that contains this code instead, then find the scanner shipped beside it.
+    static int moduleAddressAnchor = 0;
+    HMODULE module = nullptr;
+    if (::GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR> (&moduleAddressAnchor),
+                              &module) != FALSE)
+    {
+        wchar_t modulePath[32768] {};
+        constexpr auto modulePathCapacity = static_cast<DWORD> (sizeof (modulePath) / sizeof (modulePath[0]));
+        const auto chars = ::GetModuleFileNameW (module, modulePath, modulePathCapacity);
+        if (chars > 0 && chars < modulePathCapacity)
+        {
+            const auto moduleFile = juce::File (juce::String (modulePath));
+            const auto candidate = moduleFile.getSiblingFile ("GestureRackScanner.exe");
+            if (candidate.existsAsFile())
+                return candidate;
+        }
+    }
+   #endif
+
+    // Standalone builds and development layouts can use the application path.
     const auto current = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
    #if JUCE_WINDOWS
     const juce::String scannerName { "GestureRackScanner.exe" };
