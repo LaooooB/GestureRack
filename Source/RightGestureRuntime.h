@@ -7,7 +7,9 @@ namespace gr
 struct RightGestureRuntimeFrame
 {
     ControlGesture gesture = ControlGesture::unknown;
+    ControlGesture exitedGesture = ControlGesture::unknown;
     bool entered = false;
+    bool exited = false;
     bool continuousActive = false;
     bool armed = true;
 };
