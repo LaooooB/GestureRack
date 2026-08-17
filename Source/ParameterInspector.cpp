@@ -16,6 +16,8 @@ const juce::Colour kBlue      { 86, 156, 235 };
 const juce::Colour kGreen     { 93, 190, 126 };
 const juce::Colour kRed       { 225, 94, 94 };
 
+constexpr int parameterBadgeAreaWidth = 180;
+
 bool mappingTargetsParameter (const GestureBinding& binding, const ParameterDescriptor& descriptor)
 {
     if (binding.targetType != MappingTargetType::childParameter)
@@ -23,6 +25,39 @@ bool mappingTargetsParameter (const GestureBinding& binding, const ParameterDesc
     if (binding.parameterStableId.isNotEmpty() && descriptor.stableId.isNotEmpty())
         return binding.parameterStableId == descriptor.stableId;
     return binding.parameterIndexFallback == descriptor.index && binding.parameterName == descriptor.name;
+}
+
+std::vector<int> mappingIndicesForParameter (const std::vector<GestureBinding>& mappings,
+                                             const ParameterDescriptor& descriptor)
+{
+    std::vector<int> result;
+    result.reserve (7);
+    for (int i = 0; i < static_cast<int> (mappings.size()); ++i)
+        if (mappingTargetsParameter (mappings[static_cast<size_t> (i)], descriptor))
+            result.push_back (i);
+    return result;
+}
+
+std::vector<juce::Rectangle<int>> layoutGestureBadges (juce::Rectangle<int> area, int count)
+{
+    std::vector<juce::Rectangle<int>> result;
+    if (count <= 0 || area.isEmpty())
+        return result;
+
+    area = area.reduced (1, 4);
+    constexpr int gap = 3;
+    const auto totalGap = gap * (count - 1);
+    const auto chipWidth = juce::jmax (1, (area.getWidth() - totalGap) / count);
+    const auto totalWidth = chipWidth * count + totalGap;
+    auto x = area.getRight() - totalWidth;
+
+    result.reserve (static_cast<size_t> (count));
+    for (int i = 0; i < count; ++i)
+    {
+        result.emplace_back (x, area.getY(), chipWidth, area.getHeight());
+        x += chipWidth + gap;
+    }
+    return result;
 }
 
 int modeToComboId (MappingMode mode) { return static_cast<int> (mode) + 1; }
@@ -61,7 +96,7 @@ public:
             g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
         }
 
-        auto badgeArea = bounds.removeFromRight (140);
+        auto badgeArea = bounds.removeFromRight (parameterBadgeAreaWidth);
         auto typeArea = bounds.removeFromRight (70);
         auto valueArea = bounds.removeFromRight (106);
 
@@ -77,21 +112,37 @@ public:
         g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
         g.drawText (parameterKindToString (parameter.kind), typeArea, juce::Justification::centredRight);
 
-        const auto badges = owner.gestureBadgesForParameter (parameter);
+        const auto mappingIndices = mappingIndicesForParameter (owner.mappings, parameter);
         if (isDropTarget)
         {
             g.setColour (parameter.automatable ? kGreen : kRed);
             g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
             g.drawFittedText (parameter.automatable
-                                ? controlGestureToShortLabel (owner.gestureDropPreview) + "  MOVE HERE"
+                                ? controlGestureToShortLabel (owner.gestureDropPreview) + "  ADD TARGET"
                                 : juce::String ("LOCKED"),
                               badgeArea, juce::Justification::centredRight, 1);
         }
-        else if (badges.isNotEmpty())
+        else if (! mappingIndices.empty())
         {
-            g.setColour (kAccent);
-            g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-            g.drawFittedText (badges, badgeArea, juce::Justification::centredRight, 1);
+            const auto badgeRects = layoutGestureBadges (badgeArea, static_cast<int> (mappingIndices.size()));
+            for (int i = 0; i < static_cast<int> (mappingIndices.size()); ++i)
+            {
+                const auto mappingIndex = mappingIndices[static_cast<size_t> (i)];
+                if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (owner.mappings.size())))
+                    continue;
+                const auto& binding = owner.mappings[static_cast<size_t> (mappingIndex)];
+                const auto rect = badgeRects[static_cast<size_t> (i)];
+                const auto accent = binding.enabled ? kAccent : kSecondary;
+
+                g.setColour (accent.withAlpha (binding.enabled ? 0.14f : 0.08f));
+                g.fillRoundedRectangle (rect.toFloat(), 5.0f);
+                g.setColour (accent.withAlpha (0.72f));
+                g.drawRoundedRectangle (rect.toFloat(), 5.0f, 1.0f);
+                g.setColour (accent);
+                g.setFont (juce::FontOptions (8.7f, juce::Font::bold));
+                g.drawFittedText (controlGestureToShortLabel (binding.sourceGesture), rect.reduced (2, 0),
+                                  juce::Justification::centred, 1);
+            }
         }
         else if (parameter.automatable)
         {
@@ -101,8 +152,97 @@ public:
         }
     }
 
+    juce::Component* refreshComponentForRow (int row, bool, juce::Component* existing) override
+    {
+        auto* overlay = dynamic_cast<RowOverlay*> (existing);
+        if (overlay == nullptr)
+        {
+            delete existing;
+            overlay = new RowOverlay (*this);
+        }
+        overlay->setRow (row);
+        return overlay;
+    }
+
     void selectedRowsChanged (int row) override { owner.parameterSelectionChanged (row); }
+
 private:
+    class RowOverlay final : public juce::Component
+    {
+    public:
+        explicit RowOverlay (ParameterListModel& modelToUse) : model (modelToUse)
+        {
+            setOpaque (false);
+        }
+
+        void setRow (int newRow) noexcept { row = newRow; }
+
+        bool hitTest (int x, int y) override
+        {
+            return model.findMappingAt (row, { x, y }, getWidth(), getHeight()) >= 0;
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            model.handleBadgeMouseDown (row, e, getWidth(), getHeight());
+        }
+
+    private:
+        ParameterListModel& model;
+        int row = -1;
+    };
+
+    int findMappingAt (int row, juce::Point<int> point, int width, int height) const
+    {
+        if (! juce::isPositiveAndBelow (row, static_cast<int> (owner.parameters.size())))
+            return -1;
+
+        const auto& parameter = owner.parameters[static_cast<size_t> (row)];
+        const auto mappingIndices = mappingIndicesForParameter (owner.mappings, parameter);
+        if (mappingIndices.empty())
+            return -1;
+
+        auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (8, 2);
+        const auto badgeArea = bounds.removeFromRight (parameterBadgeAreaWidth);
+        const auto badgeRects = layoutGestureBadges (badgeArea, static_cast<int> (mappingIndices.size()));
+        for (int i = 0; i < static_cast<int> (badgeRects.size()); ++i)
+            if (badgeRects[static_cast<size_t> (i)].contains (point))
+                return mappingIndices[static_cast<size_t> (i)];
+        return -1;
+    }
+
+    void handleBadgeMouseDown (int row, const juce::MouseEvent& e, int width, int height)
+    {
+        const auto mappingIndex = findMappingAt (row, e.getPosition(), width, height);
+        if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (owner.mappings.size())))
+            return;
+
+        owner.selectedParameterRow = row;
+        owner.parameterList.selectRow (row, false, true);
+
+        const auto binding = owner.mappings[static_cast<size_t> (mappingIndex)];
+        if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
+        {
+            const auto parameterName = juce::isPositiveAndBelow (row, static_cast<int> (owner.parameters.size()))
+                                     ? owner.parameters[static_cast<size_t> (row)].name
+                                     : binding.parameterName;
+            const auto gestureName = controlGestureToShortLabel (binding.sourceGesture);
+            if (owner.processor.removeGestureMapping (binding.id))
+            {
+                owner.selectedMappingRow = -1;
+                owner.refreshData (true);
+                owner.statusLabel.setText (gestureName + " REMOVED FROM " + parameterName,
+                                           juce::dontSendNotification);
+            }
+            return;
+        }
+
+        owner.selectedMappingRow = mappingIndex;
+        if (owner.advancedExpanded)
+            owner.mappingList.selectRow (mappingIndex, false, true);
+        owner.loadSelectedMappingControls();
+    }
+
     ParameterInspector& owner;
 };
 
@@ -153,7 +293,7 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     mappingList.setRowHeight (29);
 
     addAndMakeVisible (helpLabel);
-    helpLabel.setText ("DROP GESTURE ON A PARAMETER — THE GESTURE MOVES FROM ITS OLD TARGET", juce::dontSendNotification);
+    helpLabel.setText ("DROP GESTURE TO ADD TARGET  /  RIGHT-CLICK BADGE TO REMOVE", juce::dontSendNotification);
     helpLabel.setColour (juce::Label::textColourId, kSecondary);
     helpLabel.setColour (juce::Label::backgroundColourId, kRaised);
     helpLabel.setFont (juce::FontOptions (9.5f, juce::Font::bold));
@@ -314,7 +454,8 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
     refreshData (true);
     parameterList.selectRow (row, false, true);
     for (int i = 0; i < static_cast<int> (mappings.size()); ++i)
-        if (mappings[static_cast<size_t> (i)].sourceGesture == gesture)
+        if (mappings[static_cast<size_t> (i)].sourceGesture == gesture
+            && mappingTargetsParameter (mappings[static_cast<size_t> (i)], parameter))
         {
             selectedMappingRow = i;
             if (advancedExpanded) mappingList.selectRow (i, false, true);
