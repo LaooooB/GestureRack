@@ -7,7 +7,7 @@ import struct
 import time
 from pathlib import Path
 
-from gesture_dataset import RIGHT_DATASET_LABELS, default_dataset_dir
+from gesture_dataset import RIGHT_DATASET_LABELS, default_dataset_dir, gesture_label_to_family
 from landmark_features import FEATURE_VERSION, extract_landmark_features
 
 
@@ -106,12 +106,15 @@ def main() -> None:
                     telemetry = {}
                 session_id = str(packet.get("session_id", ""))
                 session_seen = session_seen or session_id
+                raw_gesture = str(right.get("raw_gesture", "None"))
+                direction = raw_gesture.removeprefix("Thumb_") if raw_gesture.startswith("Thumb_") else "None"
 
                 record = {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "feature_version": FEATURE_VERSION,
                     "timestamp_ms": timestamp_ms,
                     "label": args.label,
+                    "family_label": gesture_label_to_family(args.label),
                     "physical_role": "right",
                     "session_id": session_id,
                     "camera": {
@@ -129,7 +132,9 @@ def main() -> None:
                         "confidence": float(right.get("canned_confidence", 0.0)),
                     },
                     "heuristic": {
-                        "gesture": str(right.get("raw_gesture", "None")),
+                        "gesture": raw_gesture,
+                        "family": gesture_label_to_family(raw_gesture),
+                        "direction": direction,
                         "confidence": float(right.get("confidence", 0.0)),
                     },
                     "used_world_landmarks": bool(feature.used_world_landmarks),
