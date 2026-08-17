@@ -120,7 +120,7 @@ public:
 
             auto* rowComponent = parameterList.getComponentForRowNumber (row);
             if (rowComponent == nullptr) continue;
-            const auto topLeft = getLocalPoint (rowComponent, { 0, 0 });
+            const auto topLeft = getLocalPoint (rowComponent, juce::Point<int> {});
             auto lane = juce::Rectangle<int> (parameterList.getRight() - laneWidth - 8,
                                                topLeft.y + 6,
                                                laneWidth,
