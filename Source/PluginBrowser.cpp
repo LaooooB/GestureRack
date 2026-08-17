@@ -341,7 +341,7 @@ void PluginBrowserComponent::runScan (ScanThread& thread, bool clearBlacklist)
                     {
                         if (fields.size() >= 4)
                             scanProgress.store (static_cast<float> (fields[2].getDoubleValue()), std::memory_order_relaxed);
-                        auto name = juce::File (fields.getLast()).getFileNameWithoutExtension();
+                        auto name = juce::File (fields[fields.size() - 1]).getFileNameWithoutExtension();
                         if (name.length() > 38) name = name.substring (0, 35) + "...";
                         setScanStatus ("SAFE  " + name);
                     }
