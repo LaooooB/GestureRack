@@ -1,16 +1,25 @@
 # Gesture Rack — Gesture Model Data Pipeline
 
-This document is the implementation contract for the learned physical-right-hand classifier described in the optimization plan.
+> The runtime architecture is defined in `docs/GESTURE_RECOGNITION_V3.md`. This file defines only the learned-model data and promotion pipeline.
 
-## Runtime rule
+## Model task
 
-The shipping control path remains:
+The learned model is **not** a final gesture classifier anymore.
 
-`MediaPipe landmarks/handedness -> physical role resolver -> role-specific classifier -> per-class hysteresis`
+Its task marker is:
 
-A learned landmark classifier must **not** replace the current heuristic/canned fusion merely because it trains successfully. It is promoted only after grouped out-of-fold measurements show a real accuracy improvement without adding material latency.
+`right_hand_shape_family_v2`
 
-Physical role is resolved **before** gesture classification. Gesture shape is never allowed to decide whether a detection is the selector hand or the controller hand. Therefore the same two-finger pose is `Slot 2` on physical LEFT and `Victory` on physical RIGHT.
+It predicts exactly four broad right-hand shape families:
+
+- `OpenPalm`
+- `FoldedFour`
+- `Victory`
+- `Other`
+
+`FoldedFour` deliberately combines Closed Fist and every Thumb direction. Fist-vs-Thumb is handled by the production thumb specialist. Thumb Up/Down/Left/Right is handled by deterministic landmark direction geometry.
+
+Old NPZ files without this task marker or with the old final-gesture label space fail closed and are not loaded as valid shadow models.
 
 ## Feature contract
 
@@ -23,110 +32,147 @@ Each sample contains 81 float32 features:
 - 5 fingertip reach values
 - 8 image-space direction values
 
-Palm-local coordinates remove translation and scale and tolerate hand rotation. Image-space direction remains explicit so Point Left/Right and Thumb Up/Down retain the user's visible screen direction. MediaPipe world landmarks are preferred when available; normalized landmarks are the fallback.
+World landmarks are preferred when MediaPipe supplies a complete set. Normalized landmarks are the fallback.
 
-Changing feature layout requires a new `FEATURE_VERSION`. Old models must fail closed instead of silently consuming incompatible features.
+Changing the feature layout requires a new `FEATURE_VERSION`.
 
-## Preferred data collection
+## Ground-truth labels collected
 
-1. Start the normal `GestureVisionEngine` and plugin.
-2. Use `CALIBRATE RIGHT` in the plugin. Do not record with uncalibrated physical roles.
-3. Run the guided collector:
+Collectors still record the final physical-right labels because final-label data is required to measure Fist/Thumb and direction failures:
 
-```text
-python collect_gesture_session.py
-```
-
-The Windows release package also contains `GestureDataCollector.exe`, so target-machine data can be captured without installing Python.
-
-One collector run records all required physical-right classes into one explicit `recording_group`:
-
-- `None` hard negatives
+- `None`
 - `Open_Palm`
 - `Closed_Fist`
 - `Victory`
 - `Thumb_Up`
 - `Thumb_Down`
-- `Point_Right`
-- `Point_Left`
+- `Thumb_Left`
+- `Thumb_Right`
 
-`None` is not "no hand". Keep the right hand visible and record realistic non-command poses, transitions, half-formed gestures, relaxed hands, edge-of-frame poses, and shapes that are easy to confuse with a real command.
+Training projects these labels into family labels:
 
-During every class, deliberately vary:
+- Open_Palm -> OpenPalm
+- Closed_Fist -> FoldedFour
+- Thumb_* -> FoldedFour
+- Victory -> Victory
+- None -> Other
+
+`None` means a visible right hand in a **non-command / ambiguous pose**, not an absent hand.
+
+## Hard negatives are required
+
+High-value `None` samples include:
+
+- Fist -> Thumb transitions
+- Thumb -> Fist transitions
+- half-extended thumbs
+- diagonal thumbs near direction boundaries
+- relaxed and half-open hands
+- edge-of-frame hands
+- motion blur
+- wrist rotation
+- common non-command movements
+
+Perfect static poses alone are not a sufficient training set.
+
+## Preferred data collection
+
+1. Start the normal `GestureVisionEngine` and Gesture Rack plugin.
+2. Complete physical-right calibration.
+3. Run:
+
+```text
+python collect_gesture_session.py
+```
+
+The Windows package also includes `GestureDataCollector.exe`.
+
+One guided invocation is one explicit `recording_group` containing all required final labels. During each class vary:
 
 - wrist rotation
-- position in frame
-- distance to camera
+- frame position
+- camera distance
 - hand size in frame
-- moderate finger style differences
-- bright/dim lighting
+- natural finger style
+- lighting
 - background complexity
 
-Run at least two complete guided capture groups under meaningfully different conditions. Three or more groups are preferred before considering production promotion.
+Record at least two complete groups under meaningfully different conditions. Three or more groups are preferred before production promotion decisions.
 
-### Legacy single-class collection
+`collect_runtime_dataset.py <Label>` remains available for targeted failure-case capture.
 
-`collect_runtime_dataset.py <Label>` remains available for targeted hard-negative or failure-case capture, but full guided groups are preferred for promotion evaluation because each group contains all eight classes.
+## No random frame split
 
-## No frame-random validation
+Adjacent video frames are near duplicates. Random frame train/test splits give falsely optimistic metrics.
 
-Adjacent video frames are near duplicates. Randomly splitting individual frames between train and test produces misleadingly high accuracy.
+The trainer uses explicit recording groups and `GroupKFold` out-of-fold evaluation. Every evaluated frame is predicted by a model that did not train on that frame's recording group.
 
-The trainer therefore uses explicit recording groups and `GroupKFold` out-of-fold evaluation. Every sample is predicted by a model that was trained without that sample's recording group. The promotion metrics are computed from those out-of-fold predictions across the complete dataset.
-
-After evaluation, the exported shadow candidate is retrained on all approved data. This means no data is wasted in the final candidate, while the reported promotion metrics remain unbiased by group leakage.
+After grouped evaluation, the exported shadow candidate is retrained on all approved data.
 
 ## Dataset quality gate
 
-Training refuses to produce a promotion report unless:
+Training refuses promotion reporting unless:
 
-- all seven control gestures are present
-- the `None` hard-negative class is present
-- every class meets the minimum sample count
-- every class appears in at least two independent recording groups
+- all seven final control gestures are present
+- `None` hard negatives are present
+- every final label meets the minimum sample count
+- every final label occurs in at least two independent recording groups
 
-Current defaults are 80 samples per class and two groups per class. These are minimum engineering gates, not a claim that two groups are enough for a commercial production model.
+Current minimum engineering defaults are 80 samples per final label and two groups per label.
 
-## Offline training
+## Training
 
-Training dependencies are development-only:
+Development dependencies:
 
 ```text
 python -m pip install -r requirements-dev.txt
 ```
 
-Then:
+Train:
 
 ```text
 python train_tiny_classifier.py <dataset1.jsonl> <dataset2.jsonl> ... \
   --output models/right_gesture_landmark_v1.npz
 ```
 
-The trainer uses a small one-hidden-layer MLP and exports only:
+The trainer exports:
 
-- StandardScaler mean/scale
-- first dense layer weights/bias
-- second dense layer weights/bias
-- class names
+- model task marker
 - feature version
+- four family labels
+- StandardScaler mean/scale
+- one hidden dense layer weights/bias
+- output dense layer weights/bias
 
-The shipping inference implementation in `tiny_landmark_classifier.py` is pure NumPy and does not depend on scikit-learn.
+Shipping inference remains pure NumPy and has no scikit-learn runtime dependency.
 
 ## Promotion gate
 
-The generated `.report.json` compares the tiny model against the current heuristic classifier on the **same grouped out-of-fold samples**.
+Grouped out-of-fold family metrics compare the tiny model against the production heuristic family result on the same samples.
 
-Default minimum gate:
+Current minimum gate:
 
-- tiny-model macro F1 must exceed heuristic macro F1 by at least 0.02
-- every out-of-fold class recall must be at least 0.90
+- tiny family macro-F1 >= heuristic family macro-F1 + 0.02
+- every family recall >= 0.94
 
-The report also contains per-fold train/test recording groups, confusion matrices, per-class precision/recall/F1, and the aggregate heuristic baseline.
+Passing the offline gate does **not** give the model control authority. It only makes the candidate eligible for live shadow testing.
 
-Passing this gate does not immediately replace production classification. The next phase is sidecar shadow mode: run both classifiers, transmit/log disagreements, and measure inference cost. Only after live shadow results are clean should the tiny classifier become authoritative.
+Shadow testing measures disagreement and inference cost. Direction remains deterministic even if the family model is eventually promoted.
 
-## Continuous parameter control is separate
+## Product metrics beyond family F1
 
-Discrete gesture classification and vertical parameter automation are intentionally separate pipelines.
+Frame metrics alone cannot prove a musical controller is safe. Release evaluation should also measure:
 
-`continuous_motion.py` applies a One Euro filter to right-hand height using actual callback timestamps. Gesture hold/release timing must never be inserted into this continuous path. This preserves fast parameter motion while keeping static hand jitter controlled.
+- Fist/Thumb confusion
+- Thumb direction confusion
+- false ENTER events per minute
+- missed ENTER events
+- median and P95 activation latency
+- repeated/chattering ENTER events
+- continuous-motion latency separately
+
+## Continuous control stays separate
+
+`continuous_motion.py` applies a One Euro filter to right-hand height using actual callback timestamps.
+
+Gesture family hold/release timing must never be inserted into this path. Discrete recognition can become more conservative without making continuous parameter motion feel delayed.
