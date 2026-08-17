@@ -82,8 +82,8 @@ public:
     {
         setColour (juce::TextButton::buttonColourId, control);
         setColour (juce::TextButton::buttonOnColourId, control);
-        setColour (juce::TextButton::textColourOffId, text);
-        setColour (juce::TextButton::textColourOnId, text);
+        setColour (juce::TextButton::textColourOffId, gr::ui::text);
+        setColour (juce::TextButton::textColourOnId, gr::ui::text);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
 
