@@ -179,7 +179,18 @@ bool GestureMappingEngine::addParameterBinding (int slotIndex,
     binding.parameterIndexFallback = descriptor.index;
     binding.parameterName = descriptor.name;
 
-    removeMappingsOwnedByGesture (slotIndex, gesture);
+    // A gesture is a control source, not an exclusive owner. It may fan out to
+    // any number of parameters in the selected slot. Only reject the exact same
+    // gesture -> parameter pair so accidental duplicate bindings do not stack.
+    for (const auto& existing : getMappings (slotIndex))
+    {
+        if (existing.sourceGesture == gesture && sameParameterTarget (existing, binding))
+        {
+            error = "This gesture is already mapped to that parameter.";
+            return false;
+        }
+    }
+
     slots[static_cast<size_t> (slotIndex)]->addMapping (binding);
     return true;
 }
@@ -201,7 +212,23 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
         return false;
     }
 
-    removeMappingsOwnedByGesture (slotIndex, gesture);
+    // Parameter fan-out is allowed, but two slot-state actions for the same
+    // gesture would fight each other on the same enter event.
+    for (const auto& existing : getMappings (slotIndex))
+    {
+        if (existing.sourceGesture != gesture || existing.targetType != MappingTargetType::slotAction)
+            continue;
+
+        if (existing.mode == mode)
+        {
+            error = "This gesture is already mapped to that slot action.";
+            return false;
+        }
+
+        error = "This gesture already owns the opposite slot-state action.";
+        return false;
+    }
+
     GestureBinding binding;
     binding.slotIndex = slotIndex;
     binding.sourceGesture = gesture;
@@ -227,7 +254,6 @@ bool GestureMappingEngine::updateBinding (const GestureBinding& binding, juce::S
     updated.deadband = juce::jlimit (0.0f, 0.25f, updated.deadband);
     updated.curve = juce::jlimit (-1.0f, 1.0f, updated.curve);
 
-    removeMappingsOwnedByGesture (updated.slotIndex, updated.sourceGesture, &updated.id);
     endHostGesture (updated.slotIndex, updated);
     if (! slots[static_cast<size_t> (updated.slotIndex)]->updateMapping (updated))
     {
