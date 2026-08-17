@@ -1,11 +1,13 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <array>
 #include <atomic>
 #include <functional>
 #include <memory>
 #include <vector>
 #include "UiTheme.h"
+#include "PluginCategory.h"
 
 class PluginBrowserComponent final : public juce::Component,
                                      private juce::Timer,
@@ -26,11 +28,20 @@ public:
 
 private:
     class ScanThread;
+    class CategoryListModel;
 
     int getNumRows() override;
     void paintListBoxItem (int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected) override;
     void selectedRowsChanged (int lastRowSelected) override;
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override;
+    juce::MouseCursor getMouseCursorForRow (int row) override;
+
+    void paintCategoryItem (int rowNumber, juce::Graphics&, int width, int height, bool rowIsSelected);
+    void categorySelectionChanged (int row);
+    int getCategoryCount (gr::PluginCategory category) const;
+    void rebuildCategoryCounts();
+    void updateHoverAnimation();
+    int getHoveredRow (const juce::ListBox&) const;
 
     void timerCallback() override;
     void refreshCatalog();
@@ -74,8 +85,17 @@ private:
     gr::ui::AnimatedTextButton scanButton { "SAFE SCAN" };
     gr::ui::AnimatedTextButton loadButton { "LOAD" };
     gr::ui::AnimatedTextButton closeButton { "CLOSE" };
+
+    std::unique_ptr<CategoryListModel> categoryModel;
+    juce::ListBox categoryList { "Plugin Categories" };
     juce::ListBox resultList { "Plugin Browser", this };
     juce::Label statusLabel;
+
+    gr::PluginCategory selectedCategory = gr::PluginCategory::all;
+    std::array<int, gr::pluginCategoryCount> categoryCounts {};
+    std::array<float, gr::pluginCategoryCount> categoryHoverAmounts {};
+    std::vector<float> resultHoverAmounts;
+    float searchHoverAmount = 0.0f;
 
     std::unique_ptr<juce::FileChooser> pathChooser;
     std::unique_ptr<ScanThread> scanThread;

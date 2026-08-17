@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include <iostream>
+#include "PluginCategory.h"
 
 namespace
 {
@@ -44,8 +45,17 @@ void writeStatus (const juce::File& file, const juce::String& text)
 
 void saveCatalog (juce::KnownPluginList& list, const juce::File& file)
 {
+    juce::KnownPluginList normalized;
+    for (auto plugin : list.getTypes())
+    {
+        plugin.category = gr::normalizedPluginCategoryName (plugin);
+        normalized.addType (plugin);
+    }
+    for (const auto& blacklisted : list.getBlacklistedFiles())
+        normalized.addToBlacklist (blacklisted);
+
     file.getParentDirectory().createDirectory();
-    if (auto xml = list.createXml())
+    if (auto xml = normalized.createXml())
         file.replaceWithText (xml->toString());
 }
 }

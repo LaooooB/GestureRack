@@ -1,5 +1,6 @@
 #include "PluginBrowser.h"
 #include <algorithm>
+#include <cmath>
 #if JUCE_WINDOWS
  #include <windows.h>
 #endif
@@ -12,6 +13,15 @@ juce::String compactPluginName (const juce::PluginDescription& description)
 {
     return description.name.isNotEmpty() ? description.name
         : juce::File (description.fileOrIdentifier).getFileNameWithoutExtension();
+}
+
+float approachHover (float current, float target)
+{
+    const auto speed = target > current ? 0.24f : 0.16f;
+    current += (target - current) * speed;
+    if (std::abs (target - current) < 0.008f)
+        current = target;
+    return current;
 }
 }
 
@@ -26,6 +36,32 @@ private:
     bool clearBlacklist = false;
 };
 
+class PluginBrowserComponent::CategoryListModel final : public juce::ListBoxModel
+{
+public:
+    explicit CategoryListModel (PluginBrowserComponent& ownerToUse) : owner (ownerToUse) {}
+
+    int getNumRows() override { return gr::pluginCategoryCount; }
+
+    void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
+    {
+        owner.paintCategoryItem (row, g, width, height, selected);
+    }
+
+    void selectedRowsChanged (int row) override
+    {
+        owner.categorySelectionChanged (row);
+    }
+
+    juce::MouseCursor getMouseCursorForRow (int) override
+    {
+        return juce::MouseCursor::PointingHandCursor;
+    }
+
+private:
+    PluginBrowserComponent& owner;
+};
+
 PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
                                                 CloseCallback closeCallbackToUse)
     : loadCallback (std::move (loadCallbackToUse)),
@@ -36,11 +72,10 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     juce::addDefaultFormatsToManager (formatManager);
     loadPaths();
     loadCatalog();
-    refreshCatalog();
 
     addAndMakeVisible (searchBox);
     searchBox.setMultiLine (false, false);
-    searchBox.setTextToShowWhenEmpty ("Search name / vendor / category", ui::textMuted);
+    searchBox.setTextToShowWhenEmpty ("Search plug-in / vendor / category", ui::textMuted);
     searchBox.setFont (ui::font (11.0f));
     searchBox.setColour (juce::TextEditor::backgroundColourId, ui::control);
     searchBox.setColour (juce::TextEditor::textColourId, ui::text);
@@ -52,15 +87,27 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     searchBox.onTextChange = [this] { rebuildFilter(); };
     searchBox.onReturnKey = [this] { loadSelected(); };
 
-    for (auto* button : { &pathsButton, &scanButton, &loadButton, &closeButton }) addAndMakeVisible (*button);
+    for (auto* button : { &pathsButton, &scanButton, &loadButton, &closeButton })
+        addAndMakeVisible (*button);
     pathsButton.onClick = [this] { showPathsMenu(); };
     scanButton.onClick = [this] { startScan (false); };
     loadButton.onClick = [this] { loadSelected(); };
     closeButton.onClick = [this] { if (closeCallback) closeCallback(); };
     loadButton.setEnabled (false);
 
+    categoryModel = std::make_unique<CategoryListModel> (*this);
+    addAndMakeVisible (categoryList);
+    categoryList.setModel (categoryModel.get());
+    categoryList.setRowHeight (31);
+    categoryList.setColour (juce::ListBox::backgroundColourId, ui::workspace);
+    categoryList.setColour (juce::ListBox::outlineColourId, ui::border.withAlpha (0.62f));
+    categoryList.setOutlineThickness (1);
+    categoryList.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.58f));
+    categoryList.getVerticalScrollBar().setColour (juce::ScrollBar::backgroundColourId, ui::workspace);
+    categoryList.selectRow (0, true, true);
+
     addAndMakeVisible (resultList);
-    resultList.setRowHeight (40);
+    resultList.setRowHeight (42);
     resultList.setColour (juce::ListBox::backgroundColourId, ui::workspace);
     resultList.setColour (juce::ListBox::outlineColourId, ui::border.withAlpha (0.62f));
     resultList.setOutlineThickness (1);
@@ -72,14 +119,15 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     statusLabel.setFont (ui::metaFont());
     statusLabel.setJustificationType (juce::Justification::centredLeft);
 
-    rebuildFilter();
-    startTimerHz (12);
+    refreshCatalog();
+    startTimerHz (60);
     setVisible (false);
 }
 
 PluginBrowserComponent::~PluginBrowserComponent()
 {
     stopTimer();
+    categoryList.setModel (nullptr);
     resultList.setModel (nullptr);
     if (scanThread != nullptr && scanThread->isThreadRunning())
     {
@@ -113,7 +161,15 @@ bool PluginBrowserComponent::keyPressed (const juce::KeyPress& key)
     return false;
 }
 
-int PluginBrowserComponent::getNumRows() { return static_cast<int> (filteredIndices.size()); }
+int PluginBrowserComponent::getNumRows()
+{
+    return static_cast<int> (filteredIndices.size());
+}
+
+juce::MouseCursor PluginBrowserComponent::getMouseCursorForRow (int)
+{
+    return juce::MouseCursor::PointingHandCursor;
+}
 
 void PluginBrowserComponent::paintListBoxItem (int rowNumber, juce::Graphics& g,
                                                int width, int height, bool rowIsSelected)
@@ -123,32 +179,54 @@ void PluginBrowserComponent::paintListBoxItem (int rowNumber, juce::Graphics& g,
     if (! juce::isPositiveAndBelow (catalogIndex, catalog.size())) return;
 
     const auto& plugin = catalog.getReference (catalogIndex);
-    auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 3);
+    const auto hover = juce::isPositiveAndBelow (rowNumber, static_cast<int> (resultHoverAmounts.size()))
+                     ? resultHoverAmounts[static_cast<size_t> (rowNumber)] : 0.0f;
+    auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (6, 3);
+
+    auto fill = (rowNumber & 1) != 0 ? ui::surfaceHigh.withAlpha (0.18f) : ui::workspace;
+    fill = ui::blend (fill, ui::canvas, hover * 0.48f);
     if (rowIsSelected)
+        fill = ui::blend (fill, ui::accent, 0.075f);
+
+    if (hover > 0.01f || rowIsSelected || (rowNumber & 1) != 0)
     {
-        g.setColour (ui::accent.withAlpha (0.07f));
+        g.setColour (fill);
         g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
-        g.setColour (ui::accent.withAlpha (0.70f));
+    }
+
+    if (hover > 0.01f || rowIsSelected)
+    {
+        const auto focus = juce::jmax (hover, rowIsSelected ? 1.0f : 0.0f);
+        g.setColour (ui::blend (ui::border, ui::accent, focus).withAlpha (0.88f));
         g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 6.0f, 1.0f);
     }
-    else if ((rowNumber & 1) != 0)
-    {
-        g.setColour (ui::surfaceHigh.withAlpha (0.22f));
-        g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
-    }
 
-    auto meta = bounds.removeFromRight (juce::jmin (340, bounds.getWidth() * 46 / 100));
+    auto categoryArea = bounds.removeFromRight (130);
+    auto meta = bounds.removeFromRight (juce::jmin (270, bounds.getWidth() * 42 / 100));
     bounds.removeFromRight (10);
+
     g.setColour (rowIsSelected ? ui::accent : ui::text);
     g.setFont (ui::font (11.5f, juce::Font::bold));
-    g.drawFittedText (compactPluginName (plugin), bounds, juce::Justification::centredLeft, 1);
+    g.drawFittedText (compactPluginName (plugin), bounds.reduced (6, 0),
+                      juce::Justification::centredLeft, 1);
 
-    auto metaText = plugin.manufacturerName;
-    if (plugin.category.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  ·  " : "") + plugin.category;
-    if (plugin.pluginFormatName.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  ·  " : "") + plugin.pluginFormatName;
     g.setColour (ui::textMuted);
     g.setFont (ui::font (9.5f));
+    auto metaText = plugin.manufacturerName;
+    if (plugin.pluginFormatName.isNotEmpty())
+        metaText += (metaText.isNotEmpty() ? "  ·  " : "") + plugin.pluginFormatName;
     g.drawFittedText (metaText, meta, juce::Justification::centredRight, 1);
+
+    auto categoryBounds = categoryArea.reduced (8, 8).toFloat();
+    g.setColour (rowIsSelected ? ui::accent.withAlpha (0.10f) : ui::control);
+    g.fillRoundedRectangle (categoryBounds, 5.0f);
+    g.setColour (rowIsSelected ? ui::accent.withAlpha (0.82f)
+                               : ui::blend (ui::border, ui::accent, hover * 0.65f));
+    g.drawRoundedRectangle (categoryBounds.reduced (0.5f), 5.0f, 1.0f);
+    g.setColour (rowIsSelected ? ui::accent : ui::textMuted);
+    g.setFont (ui::font (8.8f, juce::Font::bold));
+    g.drawFittedText (gr::normalizedPluginCategoryName (plugin), categoryArea.reduced (10, 7),
+                      juce::Justification::centred, 1);
 }
 
 void PluginBrowserComponent::selectedRowsChanged (int)
@@ -163,8 +241,143 @@ void PluginBrowserComponent::listBoxItemDoubleClicked (int row, const juce::Mous
     loadSelected();
 }
 
+void PluginBrowserComponent::paintCategoryItem (int rowNumber, juce::Graphics& g,
+                                                int width, int height, bool rowIsSelected)
+{
+    const auto& categories = gr::browserPluginCategories();
+    if (! juce::isPositiveAndBelow (rowNumber, static_cast<int> (categories.size()))) return;
+
+    const auto category = categories[static_cast<size_t> (rowNumber)];
+    const auto hover = categoryHoverAmounts[static_cast<size_t> (rowNumber)];
+    auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (5, 2);
+
+    auto fill = ui::workspace;
+    fill = ui::blend (fill, ui::canvas, hover * 0.48f);
+    if (rowIsSelected)
+        fill = ui::blend (fill, ui::accent, 0.075f);
+
+    if (hover > 0.01f || rowIsSelected)
+    {
+        g.setColour (fill);
+        g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
+        const auto focus = juce::jmax (hover, rowIsSelected ? 1.0f : 0.0f);
+        g.setColour (ui::blend (ui::border, ui::accent, focus).withAlpha (0.88f));
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 5.0f, 1.0f);
+    }
+
+    auto countArea = bounds.removeFromRight (42);
+    auto iconArea = bounds.removeFromLeft (18);
+
+    juce::Path chevron;
+    const auto cx = static_cast<float> (iconArea.getCentreX());
+    const auto cy = static_cast<float> (iconArea.getCentreY());
+    chevron.startNewSubPath (cx - 2.5f, cy - 4.0f);
+    chevron.lineTo (cx + 2.5f, cy);
+    chevron.lineTo (cx - 2.5f, cy + 4.0f);
+    g.setColour (rowIsSelected ? ui::accent : ui::blend (ui::gray, ui::accent, hover));
+    g.strokePath (chevron, juce::PathStrokeType (1.2f));
+
+    g.setColour (rowIsSelected ? ui::accent : ui::text);
+    g.setFont (ui::font (10.5f, rowIsSelected ? juce::Font::bold : juce::Font::plain));
+    g.drawFittedText (gr::pluginCategoryName (category), bounds.reduced (3, 0),
+                      juce::Justification::centredLeft, 1);
+
+    g.setColour (rowIsSelected ? ui::accent.withAlpha (0.78f) : ui::textMuted);
+    g.setFont (ui::font (9.0f, juce::Font::bold));
+    g.drawText (juce::String (getCategoryCount (category)), countArea.reduced (4, 0),
+                juce::Justification::centredRight);
+}
+
+void PluginBrowserComponent::categorySelectionChanged (int row)
+{
+    const auto& categories = gr::browserPluginCategories();
+    if (! juce::isPositiveAndBelow (row, static_cast<int> (categories.size())))
+        return;
+
+    selectedCategory = categories[static_cast<size_t> (row)];
+    rebuildFilter();
+    categoryList.repaint();
+}
+
+int PluginBrowserComponent::getCategoryCount (gr::PluginCategory category) const
+{
+    const auto index = static_cast<int> (category);
+    if (! juce::isPositiveAndBelow (index, gr::pluginCategoryCount))
+        return 0;
+    return categoryCounts[static_cast<size_t> (index)];
+}
+
+void PluginBrowserComponent::rebuildCategoryCounts()
+{
+    categoryCounts.fill (0);
+    for (const auto& plugin : catalog)
+    {
+        if (! gr::pluginIsRackEffect (plugin))
+            continue;
+
+        ++categoryCounts[static_cast<size_t> (gr::PluginCategory::all)];
+        const auto category = gr::classifyPlugin (plugin);
+        const auto index = static_cast<int> (category);
+        if (juce::isPositiveAndBelow (index, gr::pluginCategoryCount))
+            ++categoryCounts[static_cast<size_t> (index)];
+    }
+}
+
+int PluginBrowserComponent::getHoveredRow (const juce::ListBox& list) const
+{
+    if (! isShowing() || ! list.isShowing())
+        return -1;
+
+    const auto screen = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+    if (! list.getScreenBounds().contains (screen))
+        return -1;
+
+    const auto local = list.getLocalPoint (nullptr, screen);
+    return list.getRowContainingPosition (local.x, local.y);
+}
+
+void PluginBrowserComponent::updateHoverAnimation()
+{
+    const auto hoveredCategory = getHoveredRow (categoryList);
+    const auto hoveredResult = getHoveredRow (resultList);
+    bool categoryChanged = false;
+    bool resultChanged = false;
+
+    for (int i = 0; i < gr::pluginCategoryCount; ++i)
+    {
+        const auto old = categoryHoverAmounts[static_cast<size_t> (i)];
+        categoryHoverAmounts[static_cast<size_t> (i)] =
+            approachHover (old, i == hoveredCategory ? 1.0f : 0.0f);
+        categoryChanged = categoryChanged
+                       || std::abs (old - categoryHoverAmounts[static_cast<size_t> (i)]) > 0.001f;
+    }
+
+    for (int i = 0; i < static_cast<int> (resultHoverAmounts.size()); ++i)
+    {
+        const auto old = resultHoverAmounts[static_cast<size_t> (i)];
+        resultHoverAmounts[static_cast<size_t> (i)] =
+            approachHover (old, i == hoveredResult ? 1.0f : 0.0f);
+        resultChanged = resultChanged
+                     || std::abs (old - resultHoverAmounts[static_cast<size_t> (i)]) > 0.001f;
+    }
+
+    const auto screen = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+    const auto searchTarget = isShowing() && searchBox.isShowing()
+                           && searchBox.getScreenBounds().contains (screen) ? 1.0f : 0.0f;
+    const auto oldSearch = searchHoverAmount;
+    searchHoverAmount = approachHover (searchHoverAmount, searchTarget);
+    if (std::abs (oldSearch - searchHoverAmount) > 0.001f)
+        searchBox.setColour (juce::TextEditor::outlineColourId,
+                             ui::blend (ui::border, ui::accent, searchHoverAmount));
+
+    if (categoryChanged) categoryList.repaint();
+    if (resultChanged) resultList.repaint();
+}
+
 void PluginBrowserComponent::timerCallback()
 {
+    updateHoverAnimation();
+
     const auto version = catalogVersion.load (std::memory_order_acquire);
     if (version != displayedCatalogVersion && ! scanning.load (std::memory_order_relaxed))
     {
@@ -180,6 +393,7 @@ void PluginBrowserComponent::timerCallback()
     pathsButton.setEnabled (! isScanning);
 
     juce::String text = juce::String (filteredIndices.size()) + " FX"
+                      + "  ·  " + gr::pluginCategoryName (selectedCategory)
                       + "  ·  " + juce::String (searchPaths.size()) + " PATHS";
     const auto blacklisted = getBlacklistedCount();
     if (blacklisted > 0) text += "  ·  " + juce::String (blacklisted) + " FAILED";
@@ -193,6 +407,9 @@ void PluginBrowserComponent::refreshCatalog()
 {
     knownPlugins.sort (juce::KnownPluginList::sortAlphabetically, true);
     catalog = knownPlugins.getTypes();
+    rebuildCategoryCounts();
+    categoryList.updateContent();
+    categoryList.repaint();
     rebuildFilter();
 }
 
@@ -201,17 +418,31 @@ void PluginBrowserComponent::rebuildFilter()
     filteredIndices.clear();
     auto tokens = juce::StringArray::fromTokens (searchBox.getText().trim().toLowerCase(), " ", "");
     tokens.removeEmptyStrings();
+
     for (int i = 0; i < catalog.size(); ++i)
     {
         const auto& plugin = catalog.getReference (i);
-        if (plugin.name.containsIgnoreCase ("Gesture Rack") || plugin.isInstrument || plugin.numInputChannels <= 0) continue;
-        const auto haystack = (plugin.name + " " + plugin.manufacturerName + " " + plugin.category
-                             + " " + plugin.pluginFormatName + " " + plugin.fileOrIdentifier).toLowerCase();
+        if (! gr::pluginIsRackEffect (plugin))
+            continue;
+
+        const auto category = gr::classifyPlugin (plugin);
+        if (selectedCategory != gr::PluginCategory::all && category != selectedCategory)
+            continue;
+
+        const auto categoryName = gr::pluginCategoryName (category);
+        const auto haystack = (plugin.name + " " + plugin.manufacturerName + " "
+                             + plugin.category + " " + categoryName + " "
+                             + plugin.pluginFormatName + " " + plugin.fileOrIdentifier).toLowerCase();
+
         bool matches = true;
         for (const auto& token : tokens)
             if (! haystack.contains (token)) { matches = false; break; }
-        if (matches) filteredIndices.push_back (i);
+
+        if (matches)
+            filteredIndices.push_back (i);
     }
+
+    resultHoverAmounts.assign (filteredIndices.size(), 0.0f);
     resultList.deselectAllRows();
     resultList.updateContent();
     resultList.repaint();
@@ -538,8 +769,15 @@ void PluginBrowserComponent::paint (juce::Graphics& g)
     ui::drawSectionTitle (g, "PLUGINS", { 16, 12, 110, 22 });
     g.setColour (ui::textMuted);
     g.setFont (ui::font (9.0f, juce::Font::bold));
-    g.drawText ("SLOT 0" + juce::String (targetSlot + 1) + "  ·  ISOLATED SCANNER",
+    g.drawText ("SLOT 0" + juce::String (targetSlot + 1) + "  ·  ISOLATED SCANNER  ·  AUTO CATEGORY",
                 126, 12, getWidth() - 144, 22, juce::Justification::centredLeft);
+
+    if (categoryList.getWidth() > 0)
+        ui::drawSectionTitle (g, "CATEGORIES",
+                              { categoryList.getX(), categoryList.getY() - 22, categoryList.getWidth(), 18 });
+    if (resultList.getWidth() > 0)
+        ui::drawSectionTitle (g, "RESULTS",
+                              { resultList.getX(), resultList.getY() - 22, resultList.getWidth(), 18 });
 
     if (scanning.load (std::memory_order_relaxed))
     {
@@ -556,15 +794,25 @@ void PluginBrowserComponent::resized()
 {
     auto bounds = getLocalBounds().reduced (16);
     bounds.removeFromTop (40);
+
     auto toolbar = bounds.removeFromTop (34);
     closeButton.setBounds (toolbar.removeFromRight (72)); toolbar.removeFromRight (6);
     loadButton.setBounds (toolbar.removeFromRight (72)); toolbar.removeFromRight (10);
     scanButton.setBounds (toolbar.removeFromRight (100)); toolbar.removeFromRight (6);
     pathsButton.setBounds (toolbar.removeFromRight (78)); toolbar.removeFromRight (10);
     searchBox.setBounds (toolbar);
-    bounds.removeFromTop (10);
+
+    bounds.removeFromTop (12);
     auto footer = bounds.removeFromBottom (22);
     statusLabel.setBounds (footer);
     bounds.removeFromBottom (6);
+
+    const auto categoryWidth = juce::jlimit (190, 238, getWidth() / 5);
+    auto categoryArea = bounds.removeFromLeft (categoryWidth);
+    categoryArea.removeFromTop (22);
+    categoryList.setBounds (categoryArea);
+
+    bounds.removeFromLeft (10);
+    bounds.removeFromTop (22);
     resultList.setBounds (bounds);
 }

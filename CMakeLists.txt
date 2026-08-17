@@ -74,6 +74,8 @@ target_sources(GestureRack PRIVATE
     Source/PluginProcessor.h
     Source/PluginProcessor.cpp
     Source/RackInteraction.cpp
+    Source/PluginCategory.h
+    Source/PluginCategory.cpp
     Source/PluginBrowser.h
     Source/PluginBrowser.cpp
     Source/PluginEditor.h
@@ -102,7 +104,10 @@ target_link_libraries(GestureRack
 
 juce_add_console_app(GestureRackScanner PRODUCT_NAME "GestureRackScanner")
 juce_generate_juce_header(GestureRackScanner)
-target_sources(GestureRackScanner PRIVATE Source/ScannerMain.cpp)
+target_sources(GestureRackScanner PRIVATE
+    Source/PluginCategory.h
+    Source/PluginCategory.cpp
+    Source/ScannerMain.cpp)
 target_compile_features(GestureRackScanner PRIVATE cxx_std_20)
 if (MSVC)
     target_compile_options(GestureRackScanner PRIVATE /utf-8 /MP1)
