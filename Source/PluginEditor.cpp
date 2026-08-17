@@ -200,6 +200,9 @@ GestureRackAudioProcessorEditor::~GestureRackAudioProcessorEditor()
 
 void GestureRackAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
 {
+    if (pluginBrowser != nullptr && pluginBrowser->isVisible())
+        return;
+
     int targetSlot = processor.getSelectedSlot();
     for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
         if (slotButtons[static_cast<size_t> (i)].getBounds().contains (x, y)) { targetSlot = i; break; }
@@ -270,9 +273,15 @@ void GestureRackAudioProcessorEditor::showPluginBrowser()
     if (pluginBrowser == nullptr) return;
     parameterInspector.clearGestureDragPreview();
     gestureDragging = false;
+    draggedGesture = gr::ControlGesture::unknown;
     slotDragging = false;
     slotDragSource = slotDragTarget = -1;
+    lastMousePos = { -9999, -9999 };
+    for (auto& rect : gestureRects) rect = {};
+    activeTargetRect = {};
+    bypassTargetRect = {};
     pluginBrowser->showForSlot (processor.getSelectedSlot());
+    repaint();
 }
 
 void GestureRackAudioProcessorEditor::hidePluginBrowser()
@@ -312,6 +321,7 @@ void GestureRackAudioProcessorEditor::updateSlotButtons()
 
 void GestureRackAudioProcessorEditor::handleSlotMouseDown (int slotIndex, const juce::MouseEvent& e)
 {
+    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
     if (! juce::isPositiveAndBelow (slotIndex, GestureRackAudioProcessor::slotCount)) return;
     slotDragSource = slotDragTarget = slotIndex;
     slotDragging = false;
@@ -320,6 +330,7 @@ void GestureRackAudioProcessorEditor::handleSlotMouseDown (int slotIndex, const 
 
 void GestureRackAudioProcessorEditor::handleSlotMouseDrag (const juce::MouseEvent& e)
 {
+    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
     if (! juce::isPositiveAndBelow (slotDragSource, GestureRackAudioProcessor::slotCount)) return;
     const auto point = e.getEventRelativeTo (this).getPosition();
     const auto dx = point.x - slotDragOrigin.x;
@@ -332,6 +343,7 @@ void GestureRackAudioProcessorEditor::handleSlotMouseDrag (const juce::MouseEven
 
 void GestureRackAudioProcessorEditor::handleSlotMouseUp (const juce::MouseEvent& e)
 {
+    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
     if (! juce::isPositiveAndBelow (slotDragSource, GestureRackAudioProcessor::slotCount)) return;
     if (slotDragging)
     {
@@ -422,6 +434,12 @@ juce::Rectangle<int> GestureRackAudioProcessorEditor::getGesturePaletteBounds() 
 
 void GestureRackAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
 {
+    // The browser is a modal workspace inside the editor. Parent paintOverChildren
+    // runs after every child has painted, so drawing the gesture palette here would
+    // otherwise punch through the browser visually even though the browser is in front.
+    if (pluginBrowser != nullptr && pluginBrowser->isVisible())
+        return;
+
     const auto panel = getGesturePaletteBounds();
     g.setColour (kCard); g.fillRoundedRectangle (panel.toFloat(), 12.0f);
     g.setColour (kBorder); g.drawRoundedRectangle (panel.toFloat(), 12.0f, 1.0f);
