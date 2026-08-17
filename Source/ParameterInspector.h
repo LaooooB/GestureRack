@@ -5,6 +5,7 @@
 #include <vector>
 #include "GestureBinding.h"
 #include "PluginProcessor.h"
+#include "UiTheme.h"
 
 namespace gr
 {
@@ -34,6 +35,7 @@ private:
     void applySelectedMappingControls();
     void updateControlEnablement();
     void updateAdvancedVisibility();
+    void setHoveredMapping (juce::String mappingId);
 
     juce::String describeBinding (const GestureBinding& binding) const;
     juce::String gestureBadgesForParameter (const ParameterDescriptor& descriptor) const;
@@ -48,7 +50,7 @@ private:
 
     juce::Label helpLabel;
     juce::Label statusLabel;
-    juce::TextButton advancedButton { "ADVANCED" };
+    ui::AnimatedTextButton advancedButton { "ADVANCED" };
 
     juce::ComboBox behaviorBox;
     juce::Slider minSlider;
@@ -58,9 +60,9 @@ private:
     juce::Slider deadbandSlider;
     juce::ToggleButton invertButton { "INVERT" };
     juce::ToggleButton mappingEnabledButton { "ON" };
-    juce::TextButton removeMappingButton { "REMOVE" };
-    juce::TextButton livePresetButton { "LIVE 25ms" };
-    juce::TextButton smoothPresetButton { "SMOOTH 80ms" };
+    ui::AnimatedTextButton removeMappingButton { "REMOVE" };
+    ui::AnimatedTextButton livePresetButton { "LIVE 25ms" };
+    ui::AnimatedTextButton smoothPresetButton { "SMOOTH 80ms" };
 
     std::vector<ParameterDescriptor> parameters;
     std::vector<GestureBinding> mappings;
@@ -70,6 +72,8 @@ private:
     ControlGesture gestureDropPreview = ControlGesture::unknown;
     int lastSlot = -1;
     juce::String lastPluginName;
+    juce::String hoveredMappingId;
+    float badgeHoverAmount = 0.0f;
     bool advancedExpanded = false;
     bool loadingControls = false;
 

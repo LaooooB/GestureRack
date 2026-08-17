@@ -6,14 +6,7 @@
 
 namespace
 {
-const juce::Colour kBg        { 20, 22, 26 };
-const juce::Colour kPanel     { 27, 30, 36 };
-const juce::Colour kRaised    { 35, 39, 46 };
-const juce::Colour kBorder    { 55, 61, 71 };
-const juce::Colour kText      { 232, 235, 240 };
-const juce::Colour kMuted     { 139, 148, 162 };
-const juce::Colour kAccent    { 245, 178, 60 };
-const juce::Colour kBlue      { 86, 156, 235 };
+namespace ui = gr::ui;
 
 juce::String compactPluginName (const juce::PluginDescription& description)
 {
@@ -47,25 +40,19 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
 
     addAndMakeVisible (searchBox);
     searchBox.setMultiLine (false, false);
-    searchBox.setTextToShowWhenEmpty ("Search name / vendor / category", kMuted);
-    searchBox.setColour (juce::TextEditor::backgroundColourId, kRaised);
-    searchBox.setColour (juce::TextEditor::textColourId, kText);
-    searchBox.setColour (juce::TextEditor::highlightColourId, kBlue.withAlpha (0.35f));
-    searchBox.setColour (juce::TextEditor::highlightedTextColourId, kText);
-    searchBox.setColour (juce::TextEditor::outlineColourId, kBorder);
-    searchBox.setColour (juce::TextEditor::focusedOutlineColourId, kBlue);
-    searchBox.setColour (juce::CaretComponent::caretColourId, kAccent);
+    searchBox.setTextToShowWhenEmpty ("Search name / vendor / category", ui::textMuted);
+    searchBox.setFont (ui::font (11.0f));
+    searchBox.setColour (juce::TextEditor::backgroundColourId, ui::control);
+    searchBox.setColour (juce::TextEditor::textColourId, ui::text);
+    searchBox.setColour (juce::TextEditor::highlightColourId, ui::accent.withAlpha (0.24f));
+    searchBox.setColour (juce::TextEditor::highlightedTextColourId, ui::text);
+    searchBox.setColour (juce::TextEditor::outlineColourId, ui::border);
+    searchBox.setColour (juce::TextEditor::focusedOutlineColourId, ui::accent);
+    searchBox.setColour (juce::CaretComponent::caretColourId, ui::accent);
     searchBox.onTextChange = [this] { rebuildFilter(); };
     searchBox.onReturnKey = [this] { loadSelected(); };
 
-    for (auto* button : { &pathsButton, &scanButton, &loadButton, &closeButton })
-    {
-        addAndMakeVisible (*button);
-        button->setColour (juce::TextButton::buttonColourId, kRaised);
-        button->setColour (juce::TextButton::buttonOnColourId, kBlue);
-        button->setColour (juce::TextButton::textColourOffId, kText);
-        button->setColour (juce::TextButton::textColourOnId, kText);
-    }
+    for (auto* button : { &pathsButton, &scanButton, &loadButton, &closeButton }) addAndMakeVisible (*button);
     pathsButton.onClick = [this] { showPathsMenu(); };
     scanButton.onClick = [this] { startScan (false); };
     loadButton.onClick = [this] { loadSelected(); };
@@ -73,14 +60,16 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     loadButton.setEnabled (false);
 
     addAndMakeVisible (resultList);
-    resultList.setRowHeight (38);
-    resultList.setColour (juce::ListBox::backgroundColourId, kPanel);
-    resultList.setColour (juce::ListBox::outlineColourId, kBorder);
+    resultList.setRowHeight (40);
+    resultList.setColour (juce::ListBox::backgroundColourId, ui::workspace);
+    resultList.setColour (juce::ListBox::outlineColourId, ui::border.withAlpha (0.62f));
     resultList.setOutlineThickness (1);
+    resultList.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.58f));
+    resultList.getVerticalScrollBar().setColour (juce::ScrollBar::backgroundColourId, ui::workspace);
 
     addAndMakeVisible (statusLabel);
-    statusLabel.setColour (juce::Label::textColourId, kMuted);
-    statusLabel.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    statusLabel.setColour (juce::Label::textColourId, ui::textMuted);
+    statusLabel.setFont (ui::metaFont());
     statusLabel.setJustificationType (juce::Justification::centredLeft);
 
     rebuildFilter();
@@ -129,33 +118,36 @@ int PluginBrowserComponent::getNumRows() { return static_cast<int> (filteredIndi
 void PluginBrowserComponent::paintListBoxItem (int rowNumber, juce::Graphics& g,
                                                int width, int height, bool rowIsSelected)
 {
-    if (! juce::isPositiveAndBelow (rowNumber, static_cast<int> (filteredIndices.size())))
-        return;
+    if (! juce::isPositiveAndBelow (rowNumber, static_cast<int> (filteredIndices.size()))) return;
     const auto catalogIndex = filteredIndices[static_cast<size_t> (rowNumber)];
-    if (! juce::isPositiveAndBelow (catalogIndex, catalog.size()))
-        return;
+    if (! juce::isPositiveAndBelow (catalogIndex, catalog.size())) return;
 
     const auto& plugin = catalog.getReference (catalogIndex);
-    auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 2);
+    auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 3);
     if (rowIsSelected)
     {
-        g.setColour (kBlue.withAlpha (0.18f));
+        g.setColour (ui::accent.withAlpha (0.07f));
         g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
-        g.setColour (kBlue.withAlpha (0.75f));
-        g.drawRoundedRectangle (bounds.toFloat(), 6.0f, 1.0f);
+        g.setColour (ui::accent.withAlpha (0.70f));
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 6.0f, 1.0f);
+    }
+    else if ((rowNumber & 1) != 0)
+    {
+        g.setColour (ui::surfaceHigh.withAlpha (0.22f));
+        g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
     }
 
-    auto meta = bounds.removeFromRight (juce::jmin (300, bounds.getWidth() * 46 / 100));
-    bounds.removeFromRight (8);
-    g.setColour (kText);
-    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    auto meta = bounds.removeFromRight (juce::jmin (340, bounds.getWidth() * 46 / 100));
+    bounds.removeFromRight (10);
+    g.setColour (rowIsSelected ? ui::accent : ui::text);
+    g.setFont (ui::font (11.5f, juce::Font::bold));
     g.drawFittedText (compactPluginName (plugin), bounds, juce::Justification::centredLeft, 1);
 
     auto metaText = plugin.manufacturerName;
-    if (plugin.category.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  /  " : "") + plugin.category;
-    if (plugin.pluginFormatName.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  /  " : "") + plugin.pluginFormatName;
-    g.setColour (kMuted);
-    g.setFont (juce::FontOptions (10.0f));
+    if (plugin.category.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  ·  " : "") + plugin.category;
+    if (plugin.pluginFormatName.isNotEmpty()) metaText += (metaText.isNotEmpty() ? "  ·  " : "") + plugin.pluginFormatName;
+    g.setColour (ui::textMuted);
+    g.setFont (ui::font (9.5f));
     g.drawFittedText (metaText, meta, juce::Justification::centredRight, 1);
 }
 
@@ -183,17 +175,16 @@ void PluginBrowserComponent::timerCallback()
 
     const auto isScanning = scanning.load (std::memory_order_relaxed);
     scanButton.setButtonText (isScanning ? "SCANNING" : "SAFE SCAN");
+    scanButton.setToggleState (isScanning, juce::dontSendNotification);
     scanButton.setEnabled (! isScanning);
     pathsButton.setEnabled (! isScanning);
 
     juce::String text = juce::String (filteredIndices.size()) + " FX"
-                      + "  /  " + juce::String (searchPaths.size()) + " PATHS";
+                      + "  ·  " + juce::String (searchPaths.size()) + " PATHS";
     const auto blacklisted = getBlacklistedCount();
-    if (blacklisted > 0)
-        text += "  /  " + juce::String (blacklisted) + " FAILED";
+    if (blacklisted > 0) text += "  ·  " + juce::String (blacklisted) + " FAILED";
     const auto scanText = getScanStatus();
-    if (scanText.isNotEmpty() && scanText != "READY")
-        text += "  /  " + scanText;
+    if (scanText.isNotEmpty() && scanText != "READY") text += "  ·  " + scanText;
     statusLabel.setText (text, juce::dontSendNotification);
     repaint();
 }
@@ -213,8 +204,7 @@ void PluginBrowserComponent::rebuildFilter()
     for (int i = 0; i < catalog.size(); ++i)
     {
         const auto& plugin = catalog.getReference (i);
-        if (plugin.name.containsIgnoreCase ("Gesture Rack") || plugin.isInstrument || plugin.numInputChannels <= 0)
-            continue;
+        if (plugin.name.containsIgnoreCase ("Gesture Rack") || plugin.isInstrument || plugin.numInputChannels <= 0) continue;
         const auto haystack = (plugin.name + " " + plugin.manufacturerName + " " + plugin.category
                              + " " + plugin.pluginFormatName + " " + plugin.fileOrIdentifier).toLowerCase();
         bool matches = true;
@@ -231,19 +221,16 @@ void PluginBrowserComponent::rebuildFilter()
 void PluginBrowserComponent::loadSelected()
 {
     const auto row = resultList.getSelectedRow();
-    if (! juce::isPositiveAndBelow (row, static_cast<int> (filteredIndices.size())))
-        return;
+    if (! juce::isPositiveAndBelow (row, static_cast<int> (filteredIndices.size()))) return;
     const auto catalogIndex = filteredIndices[static_cast<size_t> (row)];
-    if (! juce::isPositiveAndBelow (catalogIndex, catalog.size()))
-        return;
+    if (! juce::isPositiveAndBelow (catalogIndex, catalog.size())) return;
     if (loadCallback) loadCallback (targetSlot, catalog.getReference (catalogIndex));
     if (closeCallback) closeCallback();
 }
 
 void PluginBrowserComponent::startScan (bool clearBlacklist)
 {
-    if (scanning.exchange (true, std::memory_order_acq_rel))
-        return;
+    if (scanning.exchange (true, std::memory_order_acq_rel)) return;
     scanProgress.store (0.0f, std::memory_order_relaxed);
     setScanStatus (clearBlacklist ? "RETRY FAILED" : "STARTING SAFE SCAN");
     if (scanThread != nullptr)
@@ -267,8 +254,6 @@ void PluginBrowserComponent::startScan (bool clearBlacklist)
 juce::File PluginBrowserComponent::findScannerExecutable() const
 {
    #if JUCE_WINDOWS
-    // In a VST3, currentExecutableFile is the DAW executable. Resolve the DLL
-    // that contains this code instead, then find the scanner shipped beside it.
     static int moduleAddressAnchor = 0;
     HMODULE module = nullptr;
     if (::GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
@@ -283,13 +268,11 @@ juce::File PluginBrowserComponent::findScannerExecutable() const
         {
             const auto moduleFile = juce::File (juce::String (modulePath));
             const auto candidate = moduleFile.getSiblingFile ("GestureRackScanner.exe");
-            if (candidate.existsAsFile())
-                return candidate;
+            if (candidate.existsAsFile()) return candidate;
         }
     }
    #endif
 
-    // Standalone builds and development layouts can use the application path.
     const auto current = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
    #if JUCE_WINDOWS
     const juce::String scannerName { "GestureRackScanner.exe" };
@@ -297,11 +280,9 @@ juce::File PluginBrowserComponent::findScannerExecutable() const
     const juce::String scannerName { "GestureRackScanner" };
    #endif
     auto candidate = current.getSiblingFile (scannerName);
-    if (candidate.existsAsFile())
-        return candidate;
+    if (candidate.existsAsFile()) return candidate;
     candidate = current.getParentDirectory().getChildFile (scannerName);
-    if (candidate.existsAsFile())
-        return candidate;
+    if (candidate.existsAsFile()) return candidate;
     return {};
 }
 
@@ -441,8 +422,7 @@ void PluginBrowserComponent::showPathsMenu()
     if (! searchPaths.isEmpty())
     {
         juce::PopupMenu removeMenu;
-        for (int i = 0; i < searchPaths.size(); ++i)
-            removeMenu.addItem (1000 + i, searchPaths[i]);
+        for (int i = 0; i < searchPaths.size(); ++i) removeMenu.addItem (1000 + i, searchPaths[i]);
         menu.addSeparator();
         menu.addSubMenu ("REMOVE PATH", removeMenu);
     }
@@ -552,40 +532,38 @@ juce::File PluginBrowserComponent::getScannerStatusFile() const { return getSett
 
 void PluginBrowserComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (kBg);
-    g.setColour (kPanel);
-    g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 12.0f);
-    g.setColour (kBorder);
-    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 12.0f, 1.0f);
-    g.setColour (kText);
-    g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-    g.drawText ("PLUGINS  /  SLOT " + juce::String (targetSlot + 1),
-                14, 10, getWidth() - 28, 20, juce::Justification::centredLeft);
-    g.setColour (kMuted);
-    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-    g.drawText ("ISOLATED SCANNER", getWidth() - 180, 10, 164, 20, juce::Justification::centredRight);
+    g.fillAll (ui::canvas);
+    ui::drawPanel (g, getLocalBounds().toFloat(), true);
+
+    ui::drawSectionTitle (g, "PLUGINS", { 16, 12, 110, 22 });
+    g.setColour (ui::textMuted);
+    g.setFont (ui::font (9.0f, juce::Font::bold));
+    g.drawText ("SLOT 0" + juce::String (targetSlot + 1) + "  ·  ISOLATED SCANNER",
+                126, 12, getWidth() - 144, 22, juce::Justification::centredLeft);
 
     if (scanning.load (std::memory_order_relaxed))
     {
-        auto progress = juce::Rectangle<float> (14.0f, 36.0f, static_cast<float> (getWidth() - 28), 3.0f);
-        g.setColour (kRaised); g.fillRect (progress);
+        auto progress = juce::Rectangle<float> (16.0f, 42.0f, static_cast<float> (getWidth() - 32), 2.0f);
+        g.setColour (ui::control);
+        g.fillRect (progress);
         progress.setWidth (progress.getWidth() * juce::jlimit (0.0f, 1.0f, scanProgress.load (std::memory_order_relaxed)));
-        g.setColour (kAccent); g.fillRect (progress);
+        g.setColour (ui::accent);
+        g.fillRect (progress);
     }
 }
 
 void PluginBrowserComponent::resized()
 {
-    auto bounds = getLocalBounds().reduced (14);
-    bounds.removeFromTop (36);
+    auto bounds = getLocalBounds().reduced (16);
+    bounds.removeFromTop (40);
     auto toolbar = bounds.removeFromTop (34);
-    closeButton.setBounds (toolbar.removeFromRight (70)); toolbar.removeFromRight (6);
-    loadButton.setBounds (toolbar.removeFromRight (70)); toolbar.removeFromRight (10);
-    scanButton.setBounds (toolbar.removeFromRight (96)); toolbar.removeFromRight (6);
-    pathsButton.setBounds (toolbar.removeFromRight (82)); toolbar.removeFromRight (10);
+    closeButton.setBounds (toolbar.removeFromRight (72)); toolbar.removeFromRight (6);
+    loadButton.setBounds (toolbar.removeFromRight (72)); toolbar.removeFromRight (10);
+    scanButton.setBounds (toolbar.removeFromRight (100)); toolbar.removeFromRight (6);
+    pathsButton.setBounds (toolbar.removeFromRight (78)); toolbar.removeFromRight (10);
     searchBox.setBounds (toolbar);
     bounds.removeFromTop (10);
-    auto footer = bounds.removeFromBottom (24);
+    auto footer = bounds.removeFromBottom (22);
     statusLabel.setBounds (footer);
     bounds.removeFromBottom (6);
     resultList.setBounds (bounds);

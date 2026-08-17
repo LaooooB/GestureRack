@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include "UiTheme.h"
 
 class PluginBrowserComponent final : public juce::Component,
                                      private juce::Timer,
@@ -69,10 +70,10 @@ private:
     juce::StringArray searchPaths;
 
     juce::TextEditor searchBox;
-    juce::TextButton pathsButton { "PATHS" };
-    juce::TextButton scanButton { "SAFE SCAN" };
-    juce::TextButton loadButton { "LOAD" };
-    juce::TextButton closeButton { "CLOSE" };
+    gr::ui::AnimatedTextButton pathsButton { "PATHS" };
+    gr::ui::AnimatedTextButton scanButton { "SAFE SCAN" };
+    gr::ui::AnimatedTextButton loadButton { "LOAD" };
+    gr::ui::AnimatedTextButton closeButton { "CLOSE" };
     juce::ListBox resultList { "Plugin Browser", this };
     juce::Label statusLabel;
 
