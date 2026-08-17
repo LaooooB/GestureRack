@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from gesture_dataset import default_dataset_dir
+from gesture_dataset import default_dataset_dir, gesture_label_to_family
 from landmark_features import FEATURE_VERSION, extract_landmark_features
 
 
@@ -21,19 +21,19 @@ SESSION_LABELS = (
     "Victory",
     "Thumb_Up",
     "Thumb_Down",
-    "Point_Right",
-    "Point_Left",
+    "Thumb_Right",
+    "Thumb_Left",
 )
 
 LABEL_INSTRUCTIONS = {
-    "None": "Show a real hard-negative hand pose: half-open, transition, relaxed or another non-listed shape. Keep the RIGHT hand visible.",
-    "Open_Palm": "Open the RIGHT palm naturally. Do not force the thumb perfectly straight.",
-    "Closed_Fist": "Make a comfortable RIGHT fist.",
-    "Victory": "Show a RIGHT-hand V / victory sign.",
-    "Thumb_Up": "Show RIGHT thumb up; vary wrist rotation slightly.",
-    "Thumb_Down": "Show RIGHT thumb down; vary wrist rotation slightly.",
-    "Point_Right": "Point horizontally to image-right with the RIGHT index finger.",
-    "Point_Left": "Point horizontally to image-left with the RIGHT index finger.",
+    "None": "Show hard negatives: relaxed, half-open, transitions, half-thumb, diagonal thumb, edge-of-frame and other non-command shapes. Keep the RIGHT hand visible.",
+    "Open_Palm": "Open the RIGHT palm naturally. Vary wrist rotation and do not force the thumb straight.",
+    "Closed_Fist": "Make a comfortable RIGHT fist. Vary whether the thumb rests over or beside the folded fingers.",
+    "Victory": "Show a RIGHT-hand V / victory sign while varying wrist angle and distance.",
+    "Thumb_Up": "Keep four fingers folded and show the RIGHT thumb clearly up. Include modest wrist rotation.",
+    "Thumb_Down": "Keep four fingers folded and show the RIGHT thumb clearly down. Include modest wrist rotation.",
+    "Thumb_Right": "Keep four fingers folded and show the RIGHT thumb clearly toward image-right. Do not use the index finger.",
+    "Thumb_Left": "Keep four fingers folded and show the RIGHT thumb clearly toward image-left. Do not use the index finger.",
 }
 
 
@@ -90,11 +90,14 @@ def make_record(packet: dict, label: str, recording_group: str) -> dict | None:
     if not isinstance(role, dict):
         role = {}
 
+    raw_gesture = str(right.get("raw_gesture", "None"))
+    direction = raw_gesture.removeprefix("Thumb_") if raw_gesture.startswith("Thumb_") else "None"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "feature_version": FEATURE_VERSION,
         "timestamp_ms": int(packet.get("timestamp_ms", 0)),
         "label": label,
+        "family_label": gesture_label_to_family(label),
         "physical_role": "right",
         "recording_group": recording_group,
         "session_id": str(packet.get("session_id", "")),
@@ -113,7 +116,9 @@ def make_record(packet: dict, label: str, recording_group: str) -> dict | None:
             "confidence": float(right.get("canned_confidence", 0.0)),
         },
         "heuristic": {
-            "gesture": str(right.get("raw_gesture", "None")),
+            "gesture": raw_gesture,
+            "family": gesture_label_to_family(raw_gesture),
+            "direction": direction,
             "confidence": float(right.get("confidence", 0.0)),
         },
         "used_world_landmarks": bool(feature.used_world_landmarks),
