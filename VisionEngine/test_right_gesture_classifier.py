@@ -32,70 +32,83 @@ def extend_finger(landmarks: list[list[float]], finger: int,
     landmarks[tip] = [x + dx * 0.31, y + dy * 0.34, 0.0]
 
 
-def set_thumb(landmarks: list[list[float]], direction: tuple[float, float]) -> None:
+def set_thumb(landmarks: list[list[float]], direction: tuple[float, float], scale: float = 1.0) -> None:
     x, y = 0.40, 0.70
     dx, dy = direction
+    magnitude = max(1.0e-6, (dx * dx + dy * dy) ** 0.5)
+    dx, dy = dx / magnitude, dy / magnitude
     landmarks[1] = [0.43, 0.73, 0.0]
     landmarks[2] = [x, y, 0.0]
-    landmarks[3] = [x + dx * 0.12, y + dy * 0.14, 0.0]
-    landmarks[4] = [x + dx * 0.24, y + dy * 0.28, 0.0]
+    landmarks[3] = [x + dx * 0.12 * scale, y + dy * 0.14 * scale, 0.0]
+    landmarks[4] = [x + dx * 0.24 * scale, y + dy * 0.28 * scale, 0.0]
 
 
 class RightGestureClassifierTests(unittest.TestCase):
-    def test_canned_five(self) -> None:
-        specs = [
-            ("Open_Palm", [0, 1, 2, 3], (-1.0, -0.2)),
-            ("Closed_Fist", [], None),
-            ("Victory", [0, 1], None),
-            ("Thumb_Up", [], (0.0, -1.0)),
-            ("Thumb_Down", [], (0.0, 1.0)),
-        ]
-        for gesture, fingers, thumb in specs:
-            with self.subTest(gesture=gesture):
-                landmarks = base_hand()
-                for finger in fingers:
-                    extend_finger(landmarks, finger)
-                if thumb is not None:
-                    set_thumb(landmarks, thumb)
-                result = classify_right_gesture(landmarks, gesture, 0.96)
-                self.assertEqual(result.gesture, gesture)
-                self.assertGreaterEqual(result.confidence, 0.62)
+    def test_fist_and_thumb_share_folded_four_family(self) -> None:
+        fist = classify_right_gesture(base_hand(), "Closed_Fist", 0.95)
+        thumb_hand = base_hand()
+        set_thumb(thumb_hand, (0.0, -1.0))
+        thumb = classify_right_gesture(thumb_hand, "Thumb_Up", 0.95)
+        self.assertEqual(fist.gesture, "Closed_Fist")
+        self.assertEqual(thumb.gesture, "Thumb_Up")
+        self.assertEqual(fist.family, "FoldedFour")
+        self.assertEqual(thumb.family, "FoldedFour")
+        self.assertEqual(fist.thumb_state, "Tucked")
+        self.assertEqual(thumb.thumb_state, "Extended")
 
     def test_open_palm_does_not_require_extended_thumb(self) -> None:
         landmarks = base_hand()
         for finger in range(4):
             extend_finger(landmarks, finger)
-        # Leave the thumb in the relaxed base-hand position.
         result = classify_right_gesture(landmarks, "Open_Palm", 0.72)
         self.assertEqual(result.gesture, "Open_Palm")
-        self.assertGreaterEqual(result.confidence, 0.58)
+        self.assertEqual(result.family, "OpenPalm")
 
-    def test_horizontal_pointing_direction_without_canned_dependency(self) -> None:
-        for expected, direction in [("Point_Right", (1.0, 0.0)), ("Point_Left", (-1.0, 0.0))]:
-            with self.subTest(expected=expected):
-                landmarks = base_hand()
-                extend_finger(landmarks, 0, direction)
-                result = classify_right_gesture(landmarks, "None", 0.0)
-                self.assertEqual(result.gesture, expected)
-                self.assertGreaterEqual(result.confidence, 0.62)
-
-    def test_diagonal_thumb_still_maps_to_vertical_intent(self) -> None:
-        for expected, direction in [("Thumb_Up", (0.30, -1.0)), ("Thumb_Down", (-0.28, 1.0))]:
+    def test_four_thumb_directions_are_geometry_not_point_gestures(self) -> None:
+        specs = [
+            ("Thumb_Up", (0.0, -1.0)),
+            ("Thumb_Down", (0.0, 1.0)),
+            ("Thumb_Left", (-1.0, 0.0)),
+            ("Thumb_Right", (1.0, 0.0)),
+        ]
+        for expected, direction in specs:
             with self.subTest(expected=expected):
                 landmarks = base_hand()
                 set_thumb(landmarks, direction)
-                result = classify_right_gesture(landmarks, expected, 0.72)
+                result = classify_right_gesture(landmarks, "None", 0.0)
                 self.assertEqual(result.gesture, expected)
-                self.assertGreaterEqual(result.confidence, 0.62)
+                self.assertEqual(result.family, "FoldedFour")
+                self.assertGreater(result.direction_confidence, 0.75)
 
-    def test_vertical_index_is_not_left_or_right(self) -> None:
+    def test_diagonal_thumb_is_intentionally_ambiguous(self) -> None:
         landmarks = base_hand()
-        extend_finger(landmarks, 0, (0.0, -1.0))
-        result = classify_right_gesture(landmarks, "Pointing_Up", 0.95)
-        self.assertNotIn(result.gesture, {"Point_Left", "Point_Right"})
+        set_thumb(landmarks, (1.0, -1.0))
+        result = classify_right_gesture(landmarks)
+        self.assertEqual(result.gesture, "None")
+        self.assertEqual(result.direction, "Ambiguous")
 
-    def test_invalid_landmarks_are_unknown(self) -> None:
+    def test_half_formed_thumb_is_not_forced_to_fist(self) -> None:
+        landmarks = base_hand()
+        set_thumb(landmarks, (0.0, -1.0), scale=0.38)
+        result = classify_right_gesture(landmarks)
+        self.assertEqual(result.gesture, "None")
+        self.assertEqual(result.thumb_state, "Ambiguous")
+
+    def test_victory_remains_separate_family(self) -> None:
+        landmarks = base_hand()
+        extend_finger(landmarks, 0)
+        extend_finger(landmarks, 1)
+        result = classify_right_gesture(landmarks, "Victory", 0.95)
+        self.assertEqual(result.gesture, "Victory")
+        self.assertEqual(result.family, "Victory")
+
+    def test_tiny_or_invalid_geometry_fails_closed(self) -> None:
         self.assertEqual(classify_right_gesture([]).gesture, "None")
+        landmarks = base_hand()
+        for point in landmarks:
+            point[0] = 0.5 + (point[0] - 0.5) * 0.05
+            point[1] = 0.5 + (point[1] - 0.5) * 0.05
+        self.assertEqual(classify_right_gesture(landmarks).gesture, "None")
 
 
 if __name__ == "__main__":
