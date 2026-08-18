@@ -167,6 +167,7 @@ public:
     explicit GesturePanel (GestureRackAudioProcessorEditor& ownerToUse) : owner (ownerToUse)
     {
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        addAndMakeVisible (owner.swapHandsButton);
         startTimerHz (60);
     }
 
@@ -175,7 +176,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         ui::drawPanel (g, getLocalBounds().toFloat(), true);
-        ui::drawSectionTitle (g, "GESTURES", { 14, 9, juce::jmax (80, getWidth() - 72), 22 });
+        ui::drawSectionTitle (g, "GESTURES", { 14, 9, juce::jmax (80, getWidth() - 170), 22 });
 
         const auto gestureEnabled = owner.processor.isGestureEnabled();
         const auto powerHot = enableRect.contains (pointer);
@@ -259,6 +260,8 @@ public:
         auto content = getLocalBounds().reduced (14);
         auto header = content.removeFromTop (28);
         enableRect = header.removeFromRight (42);
+        header.removeFromRight (8);
+        owner.swapHandsButton.setBounds (header.removeFromRight (88));
         content.removeFromTop (8);
 
         auto bottom = content.removeFromBottom (56);
@@ -534,19 +537,13 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     }
 
     addAndMakeVisible (railSearchButton);
-    addAndMakeVisible (railBrowserButton);
     addAndMakeVisible (removeButton);
     addAndMakeVisible (bypassButton);
     addAndMakeVisible (pluginMoreButton);
-    addAndMakeVisible (loadButton);
-    addAndMakeVisible (calibrateHandsButton);
-    addAndMakeVisible (swapHandsButton);
     addAndMakeVisible (settingsButton);
     addAndMakeVisible (menuButton);
 
     railSearchButton.onClick = [this] { showPluginBrowser(); };
-    railBrowserButton.onClick = [this] { showPluginBrowser(); };
-    loadButton.onClick = [this] { showPluginBrowser(); };
     removeButton.onClick = [this] { removeSelectedPlugin(); };
     bypassButton.onClick = [this]
     {
@@ -557,7 +554,6 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
         repaint();
     };
     pluginMoreButton.onClick = [this] { showPluginMoreMenu(); };
-    calibrateHandsButton.onClick = [this] { processor.beginHandCalibration(); };
     swapHandsButton.onClick = [this] { processor.toggleSwapHandedness(); };
     settingsButton.onClick = [this] { showSettingsMenu(); };
     menuButton.onClick = [this] { showMainMenu(); };
@@ -658,7 +654,6 @@ void GestureRackAudioProcessorEditor::timerCallback()
     const auto bypassed = processor.isSlotBypassed (selected);
     const auto vision = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
-    const auto rolesTrusted = handRolesTrusted (vision);
     frameReader.readLatest (cameraFrame);
     refreshCameraDisplay();
 
@@ -666,10 +661,8 @@ void GestureRackAudioProcessorEditor::timerCallback()
     bypassButton.setToggleState (loaded && ! bypassed, juce::dontSendNotification);
     removeButton.setEnabled (loaded);
     bypassButton.setEnabled (loaded);
-    calibrateHandsButton.setButtonText (vision.handCalibrationActive ? "SHOW RIGHT"
-                                        : (rolesTrusted ? "RECAL RIGHT" : "CAL RIGHT"));
-    swapHandsButton.setButtonText (vision.swapHandedness ? "L/R SWAPPED" : "SWAP L/R");
-    calibrateHandsButton.setEnabled (connected && ! vision.handCalibrationActive);
+    swapHandsButton.setButtonText ("SWAP L/R");
+    swapHandsButton.setToggleState (vision.swapHandedness, juce::dontSendNotification);
     swapHandsButton.setEnabled (connected && ! vision.handCalibrationActive);
 
     updateSlotButtons();
@@ -692,20 +685,6 @@ void GestureRackAudioProcessorEditor::refreshCameraDisplay()
     cameraDisplayImage = (targetW == sourceW && targetH == sourceH)
         ? cameraFrame.image.createCopy()
         : cameraFrame.image.rescaled (targetW, targetH, juce::Graphics::ResamplingQuality::mediumResamplingQuality);
-    if (! cameraDisplayImage.isValid()) return;
-
-    juce::Image::BitmapData pixels (cameraDisplayImage, 0, 0,
-                                    cameraDisplayImage.getWidth(), cameraDisplayImage.getHeight(),
-                                    juce::Image::BitmapData::readWrite);
-    for (int y = 0; y < cameraDisplayImage.getHeight(); ++y)
-        for (int x = 0; x < cameraDisplayImage.getWidth(); ++x)
-        {
-            const auto c = pixels.getPixelColour (x, y);
-            const auto luma = juce::jlimit (0.0f, 1.0f,
-                c.getFloatRed() * 0.299f + c.getFloatGreen() * 0.587f + c.getFloatBlue() * 0.114f);
-            const auto muted = juce::Colour::fromFloatRGBA (luma * 0.88f, luma * 0.88f, luma * 0.88f, c.getFloatAlpha());
-            pixels.setPixelColour (x, y, muted);
-        }
 }
 
 void GestureRackAudioProcessorEditor::updateEmbeddedEditor()
@@ -759,7 +738,7 @@ void GestureRackAudioProcessorEditor::adaptEditorToNativeSize (bool force)
     const auto upperHeight = largestNativeEditorSize.y > 0 ? juce::jmax (360, largestNativeEditorSize.y + 70) : 420;
     const auto desiredWidth = scaledMetric (uiScale, metrics::outerMargin * 2 + 230 + metrics::gutter * 2 + 340) + centerWidth;
     const auto desiredHeight = scaledMetric (uiScale, metrics::outerMargin * 2 + metrics::topBarHeight
-                                                   + metrics::footerHeight + metrics::gutter * 3)
+                                                   + metrics::gutter * 2)
                              + upperHeight + scaledMetric (uiScale, 350);
 
     setResizeLimits (metrics::minimumEditorWidth, metrics::minimumEditorHeight, maxWidth, maxHeight);
@@ -833,8 +812,6 @@ void GestureRackAudioProcessorEditor::showSettingsMenu()
     menu.addItem (109, "SELECT  SLOT " + (snapshot.left.present && snapshot.left.stableSlot > 0
         ? juce::String (snapshot.left.stableSlot) : juce::String ("--")), false);
     menu.addSeparator();
-    menu.addItem (1, "Show hand landmarks", true, showCameraLandmarks);
-    menu.addSeparator();
     menu.addSectionHeader ("UI Scale");
     menu.addItem (90, "90%", true, std::abs (uiScale - 0.90f) < 0.01f);
     menu.addItem (100, "100%", true, std::abs (uiScale - 1.00f) < 0.01f);
@@ -846,12 +823,7 @@ void GestureRackAudioProcessorEditor::showSettingsMenu()
                         [safe] (int result)
                         {
                             if (safe == nullptr || result == 0) return;
-                            if (result == 1)
-                            {
-                                safe->showCameraLandmarks = ! safe->showCameraLandmarks;
-                                safe->repaint();
-                            }
-                            else if (result == 90 || result == 100 || result == 110 || result == 125)
+                            if (result == 90 || result == 100 || result == 110 || result == 125)
                                 safe->setUiScale (static_cast<float> (result) / 100.0f);
                         });
 }
@@ -1039,7 +1011,6 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     ui::drawPanel (g, pluginRailBounds.toFloat(), true);
     ui::drawPanel (g, pluginPanelBounds.toFloat(), true);
     ui::drawPanel (g, cameraPanelBounds.toFloat(), true);
-    ui::drawPanel (g, footerPanelBounds.toFloat(), false);
 
     auto railHeader = pluginRailBounds.reduced (14).removeFromTop (26);
     ui::drawSectionTitle (g, "PLUGINS", railHeader);
@@ -1079,11 +1050,11 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
         g.drawImage (cameraDisplayImage, imageRect.getX(), imageRect.getY(), imageRect.getWidth(), imageRect.getHeight(),
                      0, 0, iw, ih, false);
         drawCameraReticle (g, imageRect.toFloat());
-        if (showCameraLandmarks && cameraFrame.timestampMs == snapshot.timestampMs)
-        {
-            drawHandOverlay (g, imageRect.toFloat(), snapshot.left, ui::textMuted);
-            drawHandOverlay (g, imageRect.toFloat(), snapshot.right, ui::accent);
-        }
+        // Tracking is part of the live camera surface, not a diagnostics option. Both
+        // physical hands use the same yellow point/line language so the user can read
+        // tracking quality immediately without decoding colour roles.
+        drawHandOverlay (g, imageRect.toFloat(), snapshot.left, ui::accent);
+        drawHandOverlay (g, imageRect.toFloat(), snapshot.right, ui::accent);
         g.restoreState();
     }
     else
@@ -1094,6 +1065,8 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
                     cameraPreviewBounds, juce::Justification::centred);
         drawCameraReticle (g, cameraPreviewBounds.toFloat().reduced (12.0f));
     }
+
+    drawCameraMotionTelemetry (g, snapshot);
 }
 
 void GestureRackAudioProcessorEditor::drawCameraReticle (juce::Graphics& g, juce::Rectangle<float> imageArea)
@@ -1127,16 +1100,74 @@ void GestureRackAudioProcessorEditor::drawHandOverlay (juce::Graphics& g, juce::
         const auto y = juce::jlimit (0.0f, 1.0f, hand.landmarks[i].y);
         points[i] = { imageArea.getX() + x * imageArea.getWidth(), imageArea.getY() + y * imageArea.getHeight() };
     }
-    g.setColour (colour.withAlpha (0.86f));
+    g.setColour (colour.withAlpha (0.92f));
     for (const auto [a, b] : handConnections)
-        g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 1.4f);
+        g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 1.55f);
     for (const auto& point : points)
     {
-        g.setColour (ui::canvas.withAlpha (0.55f));
-        g.fillEllipse (point.x - 2.8f, point.y - 2.8f, 5.6f, 5.6f);
+        g.setColour (ui::canvas.withAlpha (0.66f));
+        g.fillEllipse (point.x - 3.0f, point.y - 3.0f, 6.0f, 6.0f);
         g.setColour (colour);
-        g.fillEllipse (point.x - 1.5f, point.y - 1.5f, 3.0f, 3.0f);
+        g.fillEllipse (point.x - 1.7f, point.y - 1.7f, 3.4f, 3.4f);
     }
+}
+
+void GestureRackAudioProcessorEditor::drawCameraMotionTelemetry (juce::Graphics& g,
+                                                                  const gr::DualHandVisionSnapshot& snapshot)
+{
+    if (cameraTelemetryBounds.isEmpty()) return;
+
+    auto panel = cameraTelemetryBounds.toFloat();
+    g.setColour (ui::viewport);
+    g.fillRoundedRectangle (panel, 5.0f);
+    g.setColour (ui::border.withAlpha (0.54f));
+    g.drawRoundedRectangle (panel.reduced (0.5f), 5.0f, 0.8f);
+
+    auto content = cameraTelemetryBounds.reduced (10, 5);
+    auto title = content.removeFromTop (13);
+    g.setColour (snapshot.right.present ? ui::textMuted : ui::textFaint);
+    g.setFont (ui::metaFont());
+    g.drawFittedText (snapshot.right.present ? "RIGHT HAND MOTION" : "RIGHT HAND  --",
+                      title, juce::Justification::centredLeft, 1);
+
+    const auto drawAxis = [&] (juce::String label, float value)
+    {
+        if (content.getHeight() < 18) return;
+        auto row = content.removeFromTop (juce::jmin (22, content.getHeight()));
+        auto labelArea = row.removeFromLeft (82);
+        auto valueArea = row.removeFromRight (38);
+        auto trackArea = row.reduced (5, juce::jmax (1, row.getHeight() / 2 - 2));
+
+        g.setColour (ui::textMuted);
+        g.setFont (ui::metaFont());
+        g.drawFittedText (label, labelArea, juce::Justification::centredLeft, 1);
+        g.drawFittedText (snapshot.right.present ? juce::String (juce::jlimit (0.0f, 1.0f, value), 2)
+                                                 : juce::String ("--"),
+                          valueArea, juce::Justification::centredRight, 1);
+
+        if (trackArea.getWidth() <= 2 || trackArea.getHeight() <= 0) return;
+        const auto y = static_cast<float> (trackArea.getCentreY());
+        const auto left = static_cast<float> (trackArea.getX());
+        const auto right = static_cast<float> (trackArea.getRight());
+        const auto centre = (left + right) * 0.5f;
+        g.setColour (ui::border.withAlpha (0.72f));
+        g.drawLine (left, y, right, y, 1.0f);
+        g.setColour (ui::border.withAlpha (0.48f));
+        g.drawLine (centre, y - 3.0f, centre, y + 3.0f, 0.8f);
+
+        if (snapshot.right.present)
+        {
+            const auto normalised = juce::jlimit (0.0f, 1.0f, value);
+            const auto markerX = left + normalised * (right - left);
+            g.setColour (ui::accent.withAlpha (0.78f));
+            g.drawLine (left, y, markerX, y, 1.35f);
+            g.setColour (ui::accent);
+            g.fillEllipse (markerX - 2.7f, y - 2.7f, 5.4f, 5.4f);
+        }
+    };
+
+    drawAxis ("X  HORIZONTAL", snapshot.right.palmX);
+    drawAxis ("Y  VERTICAL", snapshot.right.height);
 }
 
 void GestureRackAudioProcessorEditor::resized()
@@ -1144,12 +1175,9 @@ void GestureRackAudioProcessorEditor::resized()
     const auto outer = scaledMetric (uiScale, metrics::outerMargin);
     const auto gap = scaledMetric (uiScale, metrics::gutter);
     const auto topHeight = scaledMetric (uiScale, metrics::topBarHeight);
-    const auto footerHeight = scaledMetric (uiScale, metrics::footerHeight);
     auto root = getLocalBounds().reduced (outer);
     topBarBounds = root.removeFromTop (topHeight);
     root.removeFromTop (gap);
-    footerPanelBounds = root.removeFromBottom (footerHeight);
-    root.removeFromBottom (gap);
     auto workspace = root;
 
     const auto railMin = scaledMetric (uiScale, 200);
@@ -1183,9 +1211,6 @@ void GestureRackAudioProcessorEditor::resized()
     auto railHeader = railContent.removeFromTop (scaledMetric (uiScale, 28));
     railSearchButton.setBounds (railHeader.removeFromRight (scaledMetric (uiScale, 30)));
     railContent.removeFromTop (scaledMetric (uiScale, 8));
-    auto browserArea = railContent.removeFromBottom (scaledMetric (uiScale, 46));
-    railBrowserButton.setBounds (browserArea);
-    railContent.removeFromBottom (scaledMetric (uiScale, 10));
     const auto slotGap = scaledMetric (uiScale, 7);
     const auto available = juce::jmax (1, railContent.getHeight() - slotGap * (GestureRackAudioProcessor::slotCount - 1));
     const auto slotHeight = juce::jmax (38, available / GestureRackAudioProcessor::slotCount);
@@ -1208,14 +1233,9 @@ void GestureRackAudioProcessorEditor::resized()
 
     auto cameraContent = cameraPanelBounds.reduced (scaledMetric (uiScale, 14));
     cameraContent.removeFromTop (scaledMetric (uiScale, 32));
+    cameraTelemetryBounds = cameraContent.removeFromBottom (scaledMetric (uiScale, 68));
+    cameraContent.removeFromBottom (scaledMetric (uiScale, 8));
     cameraPreviewBounds = cameraContent;
-
-    auto footer = footerPanelBounds.reduced (scaledMetric (uiScale, 12), scaledMetric (uiScale, 9));
-    loadButton.setBounds (footer.removeFromLeft (scaledMetric (uiScale, 150)));
-    footer.removeFromLeft (scaledMetric (uiScale, 12));
-    calibrateHandsButton.setBounds (footer.removeFromLeft (scaledMetric (uiScale, 145)));
-    footer.removeFromLeft (scaledMetric (uiScale, 10));
-    swapHandsButton.setBounds (footer.removeFromLeft (scaledMetric (uiScale, 145)));
 
     auto topRight = topBarBounds;
     menuButton.setBounds (topRight.removeFromRight (scaledMetric (uiScale, 34)));
@@ -1226,7 +1246,6 @@ void GestureRackAudioProcessorEditor::resized()
     {
         auto browserBounds = getLocalBounds().reduced (outer);
         browserBounds.removeFromTop (topHeight + gap);
-        browserBounds.removeFromBottom (footerHeight + gap);
         pluginBrowser->setBounds (browserBounds);
         if (pluginBrowser->isVisible()) pluginBrowser->toFront (false);
     }
