@@ -120,6 +120,16 @@ MappingMode GestureMappingEngine::defaultModeForParameter (const ParameterDescri
     }
 }
 
+float GestureMappingEngine::normaliseHorizontalPalmX (float palmX) noexcept
+{
+    // Match the vertical control window already used by VisionEngine: users do
+    // not need to touch the camera edges to reach 0/1. The preview is mirrored,
+    // so moving the physical right hand toward the visible right side increases X.
+    constexpr auto left = 0.15f;
+    constexpr auto right = 0.85f;
+    return juce::jlimit (0.0f, 1.0f, (palmX - left) / (right - left));
+}
+
 void GestureMappingEngine::removeMappingsOwnedByGesture (int slotIndex,
                                                           ControlGesture gesture,
                                                           const juce::Uuid* exceptId)
@@ -252,7 +262,17 @@ bool GestureMappingEngine::updateBinding (const GestureBinding& binding, juce::S
     updated.maxValue = juce::jlimit (0.0f, 1.0f, updated.maxValue);
     updated.smoothingMs = juce::jlimit (0.0f, 5000.0f, updated.smoothingMs);
     updated.deadband = juce::jlimit (0.0f, 0.25f, updated.deadband);
-    updated.curve = juce::jlimit (-1.0f, 1.0f, updated.curve);
+    updated.curve = juce::jlimit (0.0f, 1.0f, updated.curve);
+    updated.sensitivity = juce::jlimit (0.25f, 8.0f, updated.sensitivity);
+
+    const auto axis = static_cast<int> (updated.sourceAxis);
+    if (axis < static_cast<int> (MappingAxis::vertical)
+        || axis > static_cast<int> (MappingAxis::horizontal))
+        updated.sourceAxis = MappingAxis::vertical;
+    const auto curveType = static_cast<int> (updated.curveType);
+    if (curveType < static_cast<int> (MappingCurveType::linear)
+        || curveType > static_cast<int> (MappingCurveType::logarithmic))
+        updated.curveType = MappingCurveType::linear;
 
     endHostGesture (updated.slotIndex, updated);
     if (! slots[static_cast<size_t> (updated.slotIndex)]->updateMapping (updated))
@@ -454,12 +474,15 @@ void GestureMappingEngine::releaseAllActiveGestures()
 
 void GestureMappingEngine::processContinuous (int slotIndex,
                                               ControlGesture gesture,
-                                              float normalizedSource,
+                                              float normalizedX,
+                                              float normalizedY,
                                               float deltaSeconds)
 {
     if (! isValidSlotIndex (slotIndex) || gesture == ControlGesture::unknown)
         return;
-    const auto sourceInput = juce::jlimit (0.0f, 1.0f, normalizedSource);
+
+    const auto sourceX = normaliseHorizontalPalmX (normalizedX);
+    const auto sourceY = juce::jlimit (0.0f, 1.0f, normalizedY);
     const auto dt = juce::jlimit (0.0001f, 1.0f, deltaSeconds);
 
     for (const auto& binding : slots[static_cast<size_t> (slotIndex)]->getMappings())
@@ -479,12 +502,19 @@ void GestureMappingEngine::processContinuous (int slotIndex,
             state.hostGestureOpen = true;
         }
 
-        auto source = binding.inverted ? 1.0f - sourceInput : sourceInput;
+        const auto selectedInput = binding.sourceAxis == MappingAxis::horizontal ? sourceX : sourceY;
+        auto source = binding.inverted ? 1.0f - selectedInput : selectedInput;
+
+        // Deadband is evaluated before sensitivity so increasing sensitivity
+        // does not also amplify camera landmark noise. Sensitivity then narrows
+        // or widens the useful physical travel around the centre of the frame.
         if (state.initialised && std::abs (source - state.lastSource) < binding.deadband)
             source = state.lastSource;
         else
             state.lastSource = source;
-        source = applyMappingCurve (source, binding.curve);
+
+        source = applyMotionSensitivity (source, binding.sensitivity);
+        source = applyMappingCurve (source, binding.curveType, binding.curve);
 
         const auto target = juce::jlimit (0.0f, 1.0f,
             binding.minValue + source * (binding.maxValue - binding.minValue));
