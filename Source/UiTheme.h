@@ -7,21 +7,32 @@
 
 namespace gr::ui
 {
-inline const juce::Colour canvas       { 0xff0a0b0c };
-inline const juce::Colour workspace    { 0xff101114 };
-inline const juce::Colour surface      { 0xff151619 };
-inline const juce::Colour surfaceHigh  { 0xff1b1c1f };
-inline const juce::Colour control      { 0xff222428 };
-inline const juce::Colour controlHigh  { 0xff27292d };
-inline const juce::Colour border       { 0xff34363a };
-inline const juce::Colour gray         { 0xff777b82 };
-inline const juce::Colour text         { 0xfff0f1f2 };
-inline const juce::Colour textMuted    { 0xff9a9da2 };
-inline const juce::Colour accent       { 0xffeedf05 };
-inline const juce::Colour statusGreen  { 0xff39d353 };
-inline const juce::Colour danger       { 0xffa84c4c };
-inline const juce::Colour viewport     { 0xff070809 };
-inline const juce::Colour shadow       { 0x26000000 };
+// PRISIM-derived neutral charcoal ladder. Yellow is reserved for actual focus/
+// selection/state, rather than being used as a generic hover colour.
+inline const juce::Colour canvas       { 0xff1e1e1e }; // window / seams
+inline const juce::Colour workspace    { 0xff2a2a2a }; // page body
+inline const juce::Colour surface      { 0xff353535 }; // package surface
+inline const juce::Colour surfaceHigh  { 0xff3a3a3a }; // quiet raised surface
+inline const juce::Colour control      { 0xff434343 }; // control field
+inline const juce::Colour controlHigh  { 0xff4e4e4e }; // hover
+inline const juce::Colour border       { 0xff585858 }; // hairline
+inline const juce::Colour borderSoft   { 0x55585858 };
+inline const juce::Colour gray         { 0xffb0b0b0 };
+inline const juce::Colour text         { 0xffeaeaea };
+inline const juce::Colour textMuted    { 0xff888888 };
+inline const juce::Colour textFaint    { 0xff5f5f5f };
+inline const juce::Colour accent       { 0xfff5df4d };
+inline const juce::Colour accentBright { 0xfffff07a };
+inline const juce::Colour accentDim    { 0xffb99a34 };
+inline const juce::Colour tertiary     { 0xff62b8c4 };
+inline const juce::Colour tertiaryDim  { 0xff3f7f88 };
+inline const juce::Colour statusGreen  { 0xff78b57b };
+inline const juce::Colour danger       { 0xffe06c75 };
+inline const juce::Colour viewport     { 0xff181818 };
+inline const juce::Colour labelChip    { 0xff181818 };
+inline const juce::Colour panelLow     { 0xff141414 };
+inline const juce::Colour shadow       { 0x33000000 };
+inline const juce::Colour onAccent     { 0xff1a1a12 };
 
 constexpr int micro = 4;
 constexpr int small = 8;
@@ -33,44 +44,72 @@ constexpr float controlRadius = metrics::controlRadius;
 
 inline juce::String fontFamily()
 {
-   #if JUCE_WINDOWS
-    return "Segoe UI";
-   #else
-    return juce::Font::getDefaultSansSerifFontName();
-   #endif
+    // Inter is the target UI family from the PRISIM handoff. JUCE will fall back to
+    // the platform sans face when Inter is not installed, keeping old installations safe.
+    return "Inter";
 }
 
-inline juce::Font font (float height, int style = juce::Font::plain)
+inline juce::Font font (float height, int style = juce::Font::plain, float tracking = 0.0f)
 {
-    return juce::Font (juce::FontOptions (fontFamily(), juce::jmax (9.0f, height), style));
+    auto result = juce::Font (juce::FontOptions (fontFamily(), juce::jmax (8.0f, height), style));
+    if (tracking != 0.0f) result = result.withExtraKerningFactor (tracking);
+    return result;
 }
 
-inline juce::Font appTitleFont() { return font (19.0f, juce::Font::bold); }
-inline juce::Font titleFont()    { return font (18.0f, juce::Font::bold); }
-inline juce::Font sectionFont()  { return font (14.0f, juce::Font::bold); }
-inline juce::Font rowFont()      { return font (13.0f, juce::Font::plain); }
-inline juce::Font controlFont()  { return font (11.5f, juce::Font::plain); }
-inline juce::Font metaFont()     { return font (10.0f, juce::Font::plain); }
+// Keep the existing component hierarchy, but adopt PRISIM's quieter type scale.
+inline juce::Font appTitleFont() { return font (17.0f, juce::Font::bold, 0.045f); }
+inline juce::Font titleFont()    { return font (15.5f, juce::Font::bold, 0.025f); }
+inline juce::Font sectionFont()  { return font (10.0f, juce::Font::bold, 0.12f); }
+inline juce::Font rowFont()      { return font (12.0f, juce::Font::plain); }
+inline juce::Font controlFont()  { return font (11.0f, juce::Font::plain); }
+inline juce::Font comboFont()    { return font (12.0f, juce::Font::bold); }
+inline juce::Font popupFont()    { return font (11.5f, juce::Font::plain); }
+inline juce::Font metaFont()     { return font (9.0f, juce::Font::plain); }
 
 inline juce::Colour blend (juce::Colour a, juce::Colour b, float amount)
 {
     return a.interpolatedWith (b, juce::jlimit (0.0f, 1.0f, amount));
 }
 
-inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> bounds, bool = false)
+inline float approachFast (float current, float target)
+{
+    const auto speed = target > current ? 0.42f : 0.34f;
+    current += (target - current) * speed;
+    if (std::abs (target - current) < 0.008f) current = target;
+    return current;
+}
+
+inline void drawPanel (juce::Graphics& g, juce::Rectangle<float> bounds, bool withHeader = false)
 {
     if (bounds.isEmpty()) return;
+
+    // One soft depth cue only. No plastic gradient/highlight treatment.
+    g.setColour (juce::Colours::black.withAlpha (0.16f));
+    g.fillRoundedRectangle (bounds.translated (0.0f, 3.0f).expanded (0.5f, 0.0f),
+                            metrics::panelRadius + 0.5f);
+
     g.setColour (surface);
     g.fillRoundedRectangle (bounds, metrics::panelRadius);
-    g.setColour (border);
+    g.setColour (border.withAlpha (0.52f));
     g.drawRoundedRectangle (bounds.reduced (0.5f), metrics::panelRadius, metrics::borderThickness);
+
+    if (withHeader && bounds.getHeight() > 40.0f)
+    {
+        auto rail = juce::Rectangle<float> (bounds.getX() + 1.0f, bounds.getY() + 1.0f,
+                                            bounds.getWidth() - 2.0f, 34.0f);
+        g.setColour (panelLow.withAlpha (0.20f));
+        g.fillRoundedRectangle (rail, metrics::panelRadius - 1.0f);
+        g.setColour (border.withAlpha (0.24f));
+        g.drawLine (bounds.getX() + 10.0f, bounds.getY() + 35.0f,
+                    bounds.getRight() - 10.0f, bounds.getY() + 35.0f, 0.7f);
+    }
 }
 
 inline void drawSectionTitle (juce::Graphics& g, const juce::String& title,
                               juce::Rectangle<int> bounds,
                               juce::Justification justification = juce::Justification::centredLeft)
 {
-    g.setColour (text);
+    g.setColour (text.withAlpha (0.94f));
     g.setFont (sectionFont());
     g.drawFittedText (title, bounds, justification, 1);
 }
@@ -259,6 +298,183 @@ inline void drawIcon (juce::Graphics& g, Icon icon, juce::Rectangle<float> bound
                                                   juce::PathStrokeType::rounded));
 }
 
+class ThemeLookAndFeel final : public juce::LookAndFeel_V4
+{
+public:
+    ThemeLookAndFeel()
+    {
+        setColour (juce::PopupMenu::backgroundColourId, surface);
+        setColour (juce::PopupMenu::textColourId, text);
+        setColour (juce::PopupMenu::headerTextColourId, textMuted);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, accent.withAlpha (0.14f));
+        setColour (juce::PopupMenu::highlightedTextColourId, text);
+
+        setColour (juce::ComboBox::backgroundColourId, control);
+        setColour (juce::ComboBox::textColourId, text);
+        setColour (juce::ComboBox::outlineColourId, border);
+        setColour (juce::ComboBox::arrowColourId, accent);
+
+        setColour (juce::TextButton::buttonColourId, control);
+        setColour (juce::TextButton::buttonOnColourId, control);
+        setColour (juce::TextButton::textColourOffId, text);
+        setColour (juce::TextButton::textColourOnId, onAccent);
+
+        setColour (juce::Label::textColourId, text);
+        setColour (juce::TextEditor::backgroundColourId, control);
+        setColour (juce::TextEditor::textColourId, text);
+        setColour (juce::TextEditor::outlineColourId, border);
+        setColour (juce::TextEditor::focusedOutlineColourId, accentDim);
+    }
+
+    juce::Font getTextButtonFont (juce::TextButton&, int) override { return controlFont(); }
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return comboFont(); }
+    juce::Font getPopupMenuFont() override { return popupFont(); }
+    juce::Font getLabelFont (juce::Label&) override { return controlFont(); }
+
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                               const juce::Colour&, bool highlighted, bool down) override
+    {
+        const auto b = button.getLocalBounds().toFloat().reduced (0.5f);
+        const auto selected = button.getToggleState();
+        auto fill = highlighted ? controlHigh : control;
+        if (selected) fill = blend (fill, accent, 0.10f);
+        if (down) fill = blend (fill, panelLow, 0.22f);
+        g.setColour (button.isEnabled() ? fill : surfaceHigh);
+        g.fillRoundedRectangle (b, metrics::controlRadius);
+        g.setColour (button.isEnabled() ? (selected ? accent : (highlighted ? gray.withAlpha (0.72f) : border.withAlpha (0.72f)))
+                                         : border.withAlpha (0.32f));
+        g.drawRoundedRectangle (b, metrics::controlRadius, 0.8f);
+    }
+
+    void drawComboBox (juce::Graphics& g, int width, int height, bool down,
+                       int buttonX, int buttonY, int buttonW, int buttonH,
+                       juce::ComboBox& box) override
+    {
+        const auto bounds = juce::Rectangle<float> (0.5f, 0.5f,
+                                                     static_cast<float> (width - 1),
+                                                     static_cast<float> (height - 1));
+        auto fill = box.isEnabled() ? control : surfaceHigh;
+        if (down) fill = controlHigh;
+        g.setColour (fill);
+        g.fillRoundedRectangle (bounds, metrics::controlRadius);
+        g.setColour (box.isEnabled() ? border.withAlpha (0.86f) : border.withAlpha (0.35f));
+        g.drawRoundedRectangle (bounds, metrics::controlRadius, 0.8f);
+
+        auto arrowArea = juce::Rectangle<float> (static_cast<float> (buttonX), static_cast<float> (buttonY),
+                                                 static_cast<float> (buttonW), static_cast<float> (buttonH))
+                         .reduced (juce::jmax (5.0f, static_cast<float> (buttonW) * 0.28f),
+                                   juce::jmax (5.0f, static_cast<float> (buttonH) * 0.32f));
+        juce::Path chevron;
+        chevron.startNewSubPath (arrowArea.getX(), arrowArea.getCentreY() - 2.0f);
+        chevron.lineTo (arrowArea.getCentreX(), arrowArea.getCentreY() + 2.0f);
+        chevron.lineTo (arrowArea.getRight(), arrowArea.getCentreY() - 2.0f);
+        g.setColour (box.isEnabled() ? accent : textFaint);
+        g.strokePath (chevron, juce::PathStrokeType (1.45f, juce::PathStrokeType::curved,
+                                                     juce::PathStrokeType::rounded));
+    }
+
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds (9, 1, juce::jmax (1, box.getWidth() - 36), juce::jmax (1, box.getHeight() - 2));
+        label.setFont (comboFont());
+    }
+
+    void drawPopupMenuBackground (juce::Graphics& g, int width, int height) override
+    {
+        g.fillAll (surface);
+        auto bounds = juce::Rectangle<float> (0.5f, 0.5f,
+                                               static_cast<float> (width - 1),
+                                               static_cast<float> (height - 1));
+        g.setColour (border.withAlpha (0.82f));
+        g.drawRoundedRectangle (bounds, 6.0f, 0.8f);
+    }
+
+    void drawPopupMenuSectionHeader (juce::Graphics& g, const juce::Rectangle<int>& area,
+                                     const juce::String& sectionName) override
+    {
+        auto rail = area.reduced (4, 1);
+        g.setColour (panelLow.withAlpha (0.44f));
+        g.fillRoundedRectangle (rail.toFloat(), 4.0f);
+        g.setColour (textMuted);
+        g.setFont (sectionFont());
+        g.drawFittedText (sectionName.toUpperCase(), rail.reduced (8, 0),
+                          juce::Justification::centredLeft, 1);
+    }
+
+    void drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area,
+                            bool isSeparator, bool isActive, bool isHighlighted,
+                            bool isTicked, bool hasSubMenu, const juce::String& itemText,
+                            const juce::String& shortcutKeyText, const juce::Drawable* icon,
+                            const juce::Colour* textColour) override
+    {
+        if (isSeparator)
+        {
+            g.setColour (border.withAlpha (0.40f));
+            g.drawHorizontalLine (area.getCentreY(), static_cast<float> (area.getX() + 9),
+                                  static_cast<float> (area.getRight() - 9));
+            return;
+        }
+
+        auto row = area.reduced (4, 2);
+        if (isHighlighted && isActive)
+        {
+            g.setColour (accent.withAlpha (0.14f));
+            g.fillRoundedRectangle (row.toFloat(), 4.0f);
+            g.setColour (accent.withAlpha (0.52f));
+            g.drawRoundedRectangle (row.toFloat().reduced (0.5f), 4.0f, 0.8f);
+        }
+
+        auto content = row.reduced (8, 0);
+        auto markArea = content.removeFromLeft (18);
+        content.removeFromLeft (3);
+        auto subArea = content.removeFromRight (hasSubMenu ? 16 : 0);
+        auto shortcutArea = content.removeFromRight (shortcutKeyText.isNotEmpty() ? 72 : 0);
+
+        const auto itemColour = textColour != nullptr ? *textColour
+            : (isActive ? (isHighlighted ? text : text.withAlpha (0.94f)) : textFaint);
+
+        if (icon != nullptr)
+        {
+            icon->drawWithin (g, markArea.toFloat().reduced (2.0f),
+                              juce::RectanglePlacement::centred, 1.0f);
+        }
+        else if (isTicked)
+        {
+            g.setColour (accent);
+            g.fillEllipse (markArea.withSizeKeepingCentre (6, 6).toFloat());
+        }
+
+        g.setColour (itemColour);
+        g.setFont (popupFont());
+        g.drawFittedText (itemText, content, juce::Justification::centredLeft, 1);
+
+        if (shortcutKeyText.isNotEmpty())
+        {
+            g.setColour (isActive ? textMuted : textFaint);
+            g.setFont (metaFont());
+            g.drawFittedText (shortcutKeyText, shortcutArea, juce::Justification::centredRight, 1);
+        }
+
+        if (hasSubMenu)
+        {
+            const auto cx = static_cast<float> (subArea.getCentreX());
+            const auto cy = static_cast<float> (subArea.getCentreY());
+            juce::Path arrow;
+            arrow.startNewSubPath (cx - 2.0f, cy - 4.0f);
+            arrow.lineTo (cx + 2.0f, cy);
+            arrow.lineTo (cx - 2.0f, cy + 4.0f);
+            g.setColour (isHighlighted ? accent : textMuted);
+            g.strokePath (arrow, juce::PathStrokeType (1.2f));
+        }
+    }
+};
+
+inline ThemeLookAndFeel& themeLookAndFeel()
+{
+    static ThemeLookAndFeel instance;
+    return instance;
+}
+
 class AnimatedTextButton : public juce::TextButton,
                            private juce::Timer
 {
@@ -293,15 +509,16 @@ public:
     {
         const auto b = getLocalBounds().toFloat().reduced (0.5f);
         const auto selected = getToggleState();
-        auto fill = blend (control, controlHigh, hoverAmount * 0.75f);
-        if (selected) fill = blend (fill, accent, 0.055f);
-        if (down) fill = blend (fill, canvas, 0.22f);
+        auto fill = blend (control, controlHigh, hoverAmount);
+        if (selected) fill = blend (fill, accent, 0.10f);
+        if (down) fill = blend (fill, panelLow, 0.20f);
         g.setColour (isEnabled() ? fill : surfaceHigh);
         g.fillRoundedRectangle (b, metrics::controlRadius);
-        g.setColour (isEnabled() ? (selected ? accent : blend (border, accent, hoverAmount * 0.8f))
-                                 : border.withAlpha (0.45f));
-        g.drawRoundedRectangle (b, metrics::controlRadius, 1.0f);
-        g.setColour (isEnabled() ? (selected ? accent : gr::ui::text) : textMuted.withAlpha (0.55f));
+        const auto edge = selected ? accent
+            : blend (border.withAlpha (0.76f), gray.withAlpha (0.72f), hoverAmount);
+        g.setColour (isEnabled() ? edge : border.withAlpha (0.35f));
+        g.drawRoundedRectangle (b, metrics::controlRadius, 0.8f);
+        g.setColour (isEnabled() ? (selected ? accent : gr::ui::text) : textFaint);
         g.setFont (controlFont());
         g.drawFittedText (getButtonText(), getLocalBounds().reduced (7, 2), juce::Justification::centred, 1);
     }
@@ -309,13 +526,8 @@ public:
 private:
     void timerCallback() override
     {
-        const auto speed = hoverTarget > hoverAmount ? 0.22f : 0.16f;
-        hoverAmount += (hoverTarget - hoverAmount) * speed;
-        if (std::abs (hoverTarget - hoverAmount) < 0.01f)
-        {
-            hoverAmount = hoverTarget;
-            stopTimer();
-        }
+        hoverAmount = approachFast (hoverAmount, hoverTarget);
+        if (hoverAmount == hoverTarget) stopTimer();
         repaint();
     }
 
@@ -356,29 +568,25 @@ public:
     {
         const auto b = getLocalBounds().toFloat().reduced (0.5f);
         const auto on = getToggleState();
-        auto fill = blend (surfaceHigh, control, hoverAmount * 0.65f);
-        if (on && accentWhenOn) fill = blend (fill, accent, 0.06f);
-        if (down) fill = blend (fill, canvas, 0.18f);
+        auto fill = blend (surfaceHigh, controlHigh, hoverAmount * 0.82f);
+        if (on && accentWhenOn) fill = blend (fill, accent, 0.08f);
+        if (down) fill = blend (fill, panelLow, 0.20f);
         g.setColour (isEnabled() ? fill : surfaceHigh.withAlpha (0.65f));
         g.fillRoundedRectangle (b, metrics::controlRadius);
-        const auto edge = on && accentWhenOn ? accent : blend (border, accent, hoverAmount * 0.72f);
-        g.setColour (isEnabled() ? edge : border.withAlpha (0.35f));
-        g.drawRoundedRectangle (b, metrics::controlRadius, 1.0f);
+        const auto edge = on && accentWhenOn ? accent
+            : blend (border.withAlpha (0.72f), gray.withAlpha (0.68f), hoverAmount);
+        g.setColour (isEnabled() ? edge : border.withAlpha (0.32f));
+        g.drawRoundedRectangle (b, metrics::controlRadius, 0.8f);
         auto iconBounds = b.reduced (juce::jmax (5.0f, juce::jmin (b.getWidth(), b.getHeight()) * 0.23f));
         drawIcon (g, icon, iconBounds,
-                  isEnabled() ? ((on && accentWhenOn) ? accent : gr::ui::text) : textMuted.withAlpha (0.45f));
+                  isEnabled() ? ((on && accentWhenOn) ? accent : gr::ui::text) : textFaint, 1.55f);
     }
 
 private:
     void timerCallback() override
     {
-        const auto speed = hoverTarget > hoverAmount ? 0.22f : 0.16f;
-        hoverAmount += (hoverTarget - hoverAmount) * speed;
-        if (std::abs (hoverTarget - hoverAmount) < 0.01f)
-        {
-            hoverAmount = hoverTarget;
-            stopTimer();
-        }
+        hoverAmount = approachFast (hoverAmount, hoverTarget);
+        if (hoverAmount == hoverTarget) stopTimer();
         repaint();
     }
 
