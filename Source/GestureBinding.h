@@ -34,6 +34,28 @@ enum class ParameterKind : int
     readOnly
 };
 
+// Continuous mappings are no longer hard-wired to hand height. The enum is
+// deliberately small today, but keeps the binding model ready for future Z,
+// rotation, pinch, velocity, etc. without adding new MappingMode values.
+enum class MappingAxis : int
+{
+    vertical = 0,
+    horizontal
+};
+
+// Curve shape is stored independently from curveAmount so the UI can expose
+// predictable named curves and still let the user continuously tune their
+// intensity. Reverse direction remains the existing `inverted` flag.
+enum class MappingCurveType : int
+{
+    linear = 0,
+    easeIn,
+    easeOut,
+    sCurve,
+    exponential,
+    logarithmic
+};
+
 struct ParameterDescriptor
 {
     juce::String stableId;
@@ -68,9 +90,18 @@ struct GestureBinding
     float smoothingMs = 25.0f;
     float deadband = 0.008f;
 
-    // -1..1. 0 is linear. Negative bends toward fast response near the low
-    // end; positive bends toward finer resolution near the low end.
-    float curve = 0.0f;
+    MappingAxis sourceAxis = MappingAxis::vertical;
+    MappingCurveType curveType = MappingCurveType::linear;
+
+    // 0..1 curve intensity. Linear ignores this value. Old states used this
+    // field as a signed -1..1 bend; fromXml migrates those states losslessly
+    // into Ease In / Ease Out plus an unsigned amount.
+    float curve = 1.0f;
+
+    // 1x preserves the normal active camera range. >1x means less hand travel
+    // produces more parameter travel; <1x deliberately makes the mapping calmer.
+    float sensitivity = 1.0f;
+
     bool inverted = false;
     bool enabled = true;
 
@@ -81,5 +112,9 @@ struct GestureBinding
 juce::String mappingTargetTypeToString (MappingTargetType type);
 juce::String mappingModeToString (MappingMode mode);
 juce::String parameterKindToString (ParameterKind kind);
-float applyMappingCurve (float source, float curve) noexcept;
+juce::String mappingAxisToString (MappingAxis axis);
+juce::String mappingCurveTypeToString (MappingCurveType type);
+
+float applyMappingCurve (float source, MappingCurveType type, float amount) noexcept;
+float applyMotionSensitivity (float source, float sensitivity) noexcept;
 }
