@@ -64,6 +64,13 @@ private:
     double targetStart = 0.0;
 };
 
+class ThemeComboBox final : public juce::ComboBox
+{
+public:
+    ThemeComboBox() { setLookAndFeel (&ui::themeLookAndFeel()); }
+    ~ThemeComboBox() override { setLookAndFeel (nullptr); }
+};
+
 class ParameterInspector final : public juce::Component,
                                  private juce::Timer
 {
@@ -121,7 +128,7 @@ private:
     ui::IconButton undoButton { ui::Icon::undo, "Undo mapping" };
     ui::IconButton moreButton { ui::Icon::more, "Mapping options" };
 
-    juce::ComboBox behaviorBox;
+    ThemeComboBox behaviorBox;
     juce::Slider minSlider;
     juce::Slider maxSlider;
     juce::Slider curveSlider;
