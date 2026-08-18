@@ -37,10 +37,12 @@ private:
     class EmbeddedEditorCanvas;
     class GesturePanel;
 
-    class RackSlotButton final : public juce::Button
+    class RackSlotButton final : public juce::Button,
+                                 private juce::Timer
     {
     public:
         RackSlotButton();
+        ~RackSlotButton() override { stopTimer(); }
         std::function<void()> bodyClick;
         std::function<void()> powerClick;
         std::function<void (const juce::MouseEvent&)> dragDown, dragMove, dragUp;
@@ -48,17 +50,23 @@ private:
         void setSlotVisualState (bool loadedToUse, bool bypassedToUse, juce::String pluginNameToUse);
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
         void resized() override;
+        void mouseEnter (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
         void mouseUp (const juce::MouseEvent&) override;
 
     private:
+        void timerCallback() override;
+
         juce::Rectangle<int> powerRect;
         bool loaded = false;
         bool bypassed = false;
         bool bodyPressed = false;
         bool powerPressed = false;
         juce::String pluginName;
+        float hoverAmount = 0.0f;
+        float hoverTarget = 0.0f;
     };
 
     void timerCallback() override;
