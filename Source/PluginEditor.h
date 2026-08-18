@@ -89,6 +89,7 @@ private:
     void drawHandOverlay (juce::Graphics&, juce::Rectangle<float> imageArea,
                           const gr::HandSnapshot&, juce::Colour colour);
     void drawCameraReticle (juce::Graphics&, juce::Rectangle<float> imageArea);
+    void drawCameraMotionTelemetry (juce::Graphics&, const gr::DualHandVisionSnapshot&);
     void removeSelectedPlugin();
 
     GestureRackAudioProcessor& processor;
@@ -100,14 +101,11 @@ private:
     juce::Point<int> slotDragOrigin;
 
     gr::ui::IconButton railSearchButton { gr::ui::Icon::search, "Search plugins" };
-    gr::ui::AnimatedTextButton railBrowserButton { "BROWSER" };
 
     gr::ui::IconButton removeButton { gr::ui::Icon::trash, "Remove plugin" };
     gr::ui::AnimatedTextButton bypassButton { "ACTIVE" };
     gr::ui::IconButton pluginMoreButton { gr::ui::Icon::more, "Plugin options" };
 
-    gr::ui::AnimatedTextButton loadButton { "PLUGINS" };
-    gr::ui::AnimatedTextButton calibrateHandsButton { "CAL RIGHT" };
     gr::ui::AnimatedTextButton swapHandsButton { "SWAP L/R" };
 
     gr::ui::IconButton settingsButton { gr::ui::Icon::settings, "Settings" };
@@ -133,11 +131,10 @@ private:
     juce::Rectangle<int> pluginViewportBounds;
     juce::Rectangle<int> cameraPanelBounds;
     juce::Rectangle<int> cameraPreviewBounds;
-    juce::Rectangle<int> footerPanelBounds;
+    juce::Rectangle<int> cameraTelemetryBounds;
 
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     bool adaptiveResizeInProgress = false;
-    bool showCameraLandmarks = false;
     float uiScale = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GestureRackAudioProcessorEditor)
