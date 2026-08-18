@@ -181,8 +181,8 @@ public:
         const auto powerHot = enableRect.contains (pointer);
         g.setColour (powerHot ? ui::controlHigh : ui::control);
         g.fillRoundedRectangle (enableRect.toFloat(), ui::metrics::controlRadius);
-        g.setColour (gestureEnabled ? ui::accent : (powerHot ? ui::textMuted : ui::border));
-        g.drawRoundedRectangle (enableRect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 1.0f);
+        g.setColour (gestureEnabled ? ui::accent : (powerHot ? ui::gray.withAlpha (0.72f) : ui::border));
+        g.drawRoundedRectangle (enableRect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 0.8f);
         ui::drawIcon (g, ui::Icon::power, enableRect.reduced (9).toFloat(),
                       gestureEnabled ? ui::accent : ui::textMuted, 1.6f);
 
@@ -197,12 +197,13 @@ public:
             const auto hot = descriptor.enabled && rect.contains (pointer);
             const auto dragSource = dragging && descriptor.gesture == draggedGesture;
             auto fill = hot ? ui::controlHigh : ui::control;
-            if (liveCard || dragSource) fill = ui::blend (fill, ui::accent, 0.055f);
+            if (liveCard || dragSource) fill = ui::blend (fill, ui::accent, 0.075f);
             g.setColour (fill);
             g.fillRoundedRectangle (rect.toFloat(), ui::metrics::cardRadius);
             g.setColour (liveCard || dragSource ? ui::accent
-                                               : (descriptor.enabled ? ui::border : ui::border.withAlpha (0.62f)));
-            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::cardRadius, 1.0f);
+                                               : (descriptor.enabled ? (hot ? ui::gray.withAlpha (0.70f) : ui::border)
+                                                                     : ui::border.withAlpha (0.52f)));
+            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::cardRadius, 0.8f);
 
             if (! descriptor.enabled) continue;
             auto iconArea = rect.reduced (10, 8);
@@ -222,8 +223,8 @@ public:
             g.setColour (hot ? ui::controlHigh : ui::control);
             g.fillRoundedRectangle (rect.toFloat(), ui::metrics::controlRadius);
             g.setColour (accentState || (dragging && rect.contains (dragPoint)) ? ui::accent
-                                                                               : (hot ? ui::textMuted : ui::border));
-            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 1.0f);
+                                                                               : (hot ? ui::gray.withAlpha (0.72f) : ui::border));
+            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 0.8f);
             auto content = rect.reduced (12, 6);
             auto iconArea = content.removeFromLeft (32).withSizeKeepingCentre (22, 22);
             ui::drawIcon (g, icon, iconArea.toFloat(), accentState ? ui::accent : ui::text, 1.55f);
@@ -240,10 +241,10 @@ public:
         {
             auto bubble = juce::Rectangle<float> (86.0f, 28.0f).withCentre (dragPoint.toFloat());
             bubble = bubble.constrainedWithin (getLocalBounds().toFloat().reduced (2.0f));
-            g.setColour (ui::canvas.withAlpha (0.96f));
-            g.fillRoundedRectangle (bubble, 6.0f);
+            g.setColour (ui::panelLow.withAlpha (0.96f));
+            g.fillRoundedRectangle (bubble, 5.0f);
             g.setColour (ui::accent);
-            g.drawRoundedRectangle (bubble, 6.0f, 1.0f);
+            g.drawRoundedRectangle (bubble, 5.0f, 0.8f);
             g.setColour (ui::accent);
             g.setFont (ui::controlFont());
             juce::String label;
@@ -419,21 +420,43 @@ void GestureRackAudioProcessorEditor::RackSlotButton::resized()
     powerRect = getLocalBounds().removeFromRight (42).reduced (8);
 }
 
-void GestureRackAudioProcessorEditor::RackSlotButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+void GestureRackAudioProcessorEditor::RackSlotButton::mouseEnter (const juce::MouseEvent& e)
+{
+    juce::Button::mouseEnter (e);
+    hoverTarget = 1.0f;
+    startTimerHz (60);
+}
+
+void GestureRackAudioProcessorEditor::RackSlotButton::mouseExit (const juce::MouseEvent& e)
+{
+    juce::Button::mouseExit (e);
+    hoverTarget = 0.0f;
+    startTimerHz (60);
+}
+
+void GestureRackAudioProcessorEditor::RackSlotButton::timerCallback()
+{
+    hoverAmount = ui::approachFast (hoverAmount, hoverTarget);
+    if (hoverAmount == hoverTarget) stopTimer();
+    repaint();
+}
+
+void GestureRackAudioProcessorEditor::RackSlotButton::paintButton (juce::Graphics& g, bool, bool down)
 {
     auto bounds = getLocalBounds().toFloat().reduced (0.5f);
     const auto selected = getToggleState();
-    auto fill = highlighted ? ui::controlHigh : ui::surfaceHigh;
-    if (selected) fill = ui::blend (fill, ui::accent, 0.045f);
-    if (down) fill = ui::blend (fill, ui::canvas, 0.18f);
+    auto fill = ui::blend (ui::surfaceHigh, ui::controlHigh, hoverAmount * 0.82f);
+    if (selected) fill = ui::blend (fill, ui::accent, 0.075f);
+    if (down) fill = ui::blend (fill, ui::panelLow, 0.20f);
     g.setColour (fill);
     g.fillRoundedRectangle (bounds, ui::metrics::cardRadius);
 
-    const auto edge = selected ? ui::accent : ui::border;
+    const auto hoverEdge = ui::blend (ui::border.withAlpha (0.74f), ui::gray.withAlpha (0.72f), hoverAmount);
+    const auto edge = selected ? ui::accent : hoverEdge;
     if (loaded)
     {
         g.setColour (edge);
-        g.drawRoundedRectangle (bounds, ui::metrics::cardRadius, 1.0f);
+        g.drawRoundedRectangle (bounds, ui::metrics::cardRadius, 0.8f);
         auto content = getLocalBounds().reduced (12, 5);
         auto power = content.removeFromRight (32);
         content.removeFromRight (7);
@@ -446,9 +469,9 @@ void GestureRackAudioProcessorEditor::RackSlotButton::paintButton (juce::Graphic
     else
     {
         ui::drawDashedRoundedRect (g, bounds.reduced (0.5f), ui::metrics::cardRadius,
-                                   selected ? ui::accent : ui::border, 1.0f, 5.0f, 4.0f);
-        g.setColour (selected ? ui::accent : ui::textMuted);
-        g.setFont (ui::font (24.0f));
+                                   selected ? ui::accent : hoverEdge, 0.9f, 5.0f, 4.0f);
+        g.setColour (selected ? ui::accent : ui::blend (ui::textMuted, ui::text, hoverAmount * 0.62f));
+        g.setFont (ui::font (22.0f));
         g.drawText ("+", getLocalBounds(), juce::Justification::centred);
     }
 }
@@ -552,7 +575,7 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     pluginViewport.setViewedComponent (embeddedCanvas.get(), false);
     pluginViewport.setScrollBarsShown (false, false);
     pluginViewport.setScrollBarThickness (8);
-    pluginViewport.setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.42f));
+    pluginViewport.setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.34f));
     pluginViewport.setColour (juce::ScrollBar::backgroundColourId, ui::viewport);
 
     gesturePanel = std::make_unique<GesturePanel> (*this);
@@ -789,6 +812,7 @@ void GestureRackAudioProcessorEditor::showSettingsMenu()
     const auto snapshot = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
     juce::PopupMenu menu;
+    menu.setLookAndFeel (&ui::themeLookAndFeel());
     menu.addSectionHeader ("Diagnostics");
     menu.addItem (101, connected ? "CAMERA  ONLINE" : "CAMERA  OFFLINE", false);
     menu.addItem (102, "BACKEND  " + (snapshot.cameraBackend.isNotEmpty() ? snapshot.cameraBackend : juce::String ("--")), false);
@@ -818,7 +842,7 @@ void GestureRackAudioProcessorEditor::showSettingsMenu()
     menu.addItem (125, "125%", true, std::abs (uiScale - 1.25f) < 0.01f);
 
     juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton),
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton).withStandardItemHeight (27),
                         [safe] (int result)
                         {
                             if (safe == nullptr || result == 0) return;
@@ -835,12 +859,13 @@ void GestureRackAudioProcessorEditor::showSettingsMenu()
 void GestureRackAudioProcessorEditor::showMainMenu()
 {
     juce::PopupMenu menu;
+    menu.setLookAndFeel (&ui::themeLookAndFeel());
     menu.addItem (1, "Plugin Browser");
     menu.addItem (2, "Scan / Paths...");
     menu.addSeparator();
     menu.addItem (3, "About Gesture Rack");
     juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuButton),
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuButton).withStandardItemHeight (27),
                         [safe] (int result)
                         {
                             if (safe == nullptr || result == 0) return;
@@ -856,13 +881,14 @@ void GestureRackAudioProcessorEditor::showPluginMoreMenu()
 {
     const auto slot = processor.getSelectedSlot();
     juce::PopupMenu menu;
+    menu.setLookAndFeel (&ui::themeLookAndFeel());
     menu.addSectionHeader (processor.isSlotLoaded (slot) ? processor.getSlotPluginName (slot) : "EMPTY SLOT");
     menu.addItem (1, "Replace / Load Plugin...");
     menu.addItem (2, "Remove Plugin", processor.isSlotLoaded (slot));
     menu.addSeparator();
     menu.addItem (3, "Diagnostics...");
     juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pluginMoreButton),
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pluginMoreButton).withStandardItemHeight (27),
                         [safe] (int result)
                         {
                             if (safe == nullptr || result == 0) return;
@@ -1021,7 +1047,7 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     if (const auto error = processor.getSlotLastError (processor.getSelectedSlot()); error.isNotEmpty())
     {
         auto errorArea = pluginPanelBounds.reduced (14).removeFromBottom (18);
-        g.setColour (ui::accent);
+        g.setColour (ui::accentDim);
         g.setFont (ui::metaFont());
         g.drawFittedText (error, errorArea, juce::Justification::centredLeft, 1);
     }
@@ -1034,9 +1060,9 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillEllipse (dot);
 
     g.setColour (ui::viewport);
-    g.fillRoundedRectangle (cameraPreviewBounds.toFloat(), 8.0f);
-    g.setColour (ui::border);
-    g.drawRoundedRectangle (cameraPreviewBounds.toFloat().reduced (0.5f), 8.0f, 1.0f);
+    g.fillRoundedRectangle (cameraPreviewBounds.toFloat(), 6.0f);
+    g.setColour (ui::border.withAlpha (0.64f));
+    g.drawRoundedRectangle (cameraPreviewBounds.toFloat().reduced (0.5f), 6.0f, 0.8f);
 
     juce::Rectangle<int> imageRect;
     if (connected && cameraDisplayImage.isValid())
@@ -1086,7 +1112,7 @@ void GestureRackAudioProcessorEditor::drawCameraReticle (juce::Graphics& g, juce
     p.startNewSubPath (cx - 6.0f, cy); p.lineTo (cx + 6.0f, cy);
     p.startNewSubPath (cx, cy - 6.0f); p.lineTo (cx, cy + 6.0f);
     g.setColour (ui::accent);
-    g.strokePath (p, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
+    g.strokePath (p, juce::PathStrokeType (1.45f, juce::PathStrokeType::curved,
                                            juce::PathStrokeType::rounded));
 }
 
