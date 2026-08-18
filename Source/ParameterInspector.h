@@ -150,7 +150,7 @@ private:
     juce::Rectangle<int> columnHeaderBounds;
     juce::Rectangle<int> learnDropBounds;
 
-    juce::UndoManager undoManager { 64, 128 };
+    juce::UndoManager undoManager { 30000, 64 };
     bool learnUndoTracking = false;
     bool learnWasArmed = false;
     int learnUndoSlot = -1;
