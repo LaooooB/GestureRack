@@ -35,9 +35,15 @@ public:
     void triggerGestureEntered (int slotIndex, ControlGesture gesture);
     void triggerGestureExited (int slotIndex, ControlGesture gesture);
     void releaseAllActiveGestures();
+
+    // normalizedX is the right-hand palm X from the mirrored camera frame.
+    // normalizedY is the existing filtered 0..1 hand-height signal. Each
+    // binding selects which axis it consumes, so one gesture can fan out to
+    // horizontal and vertical targets at the same time.
     void processContinuous (int slotIndex,
                             ControlGesture gesture,
-                            float normalizedSource,
+                            float normalizedX,
+                            float normalizedY,
                             float deltaSeconds);
 
     juce::AudioProcessorParameter* resolveParameter (int slotIndex, const GestureBinding& binding) const;
@@ -62,6 +68,7 @@ private:
     static juce::String getParameterStableId (const juce::AudioProcessorParameter& parameter);
     static bool sameParameterTarget (const GestureBinding& a, const GestureBinding& b);
     static MappingMode defaultModeForParameter (const ParameterDescriptor& descriptor) noexcept;
+    static float normaliseHorizontalPalmX (float palmX) noexcept;
     void removeMappingsOwnedByGesture (int slotIndex, ControlGesture gesture, const juce::Uuid* exceptId = nullptr);
     void pruneRuntimeStatesForSlot (int slotIndex);
     void endHostGesture (int slotIndex, const GestureBinding& binding);
