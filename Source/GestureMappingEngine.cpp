@@ -189,16 +189,39 @@ bool GestureMappingEngine::addParameterBinding (int slotIndex,
     binding.parameterIndexFallback = descriptor.index;
     binding.parameterName = descriptor.name;
 
-    // A gesture is a control source, not an exclusive owner. It may fan out to
-    // any number of parameters in the selected slot. Only reject the exact same
-    // gesture -> parameter pair so accidental duplicate bindings do not stack.
+    // A parameter has one gesture owner, while a gesture can still fan out to
+    // multiple different parameters. Dropping a new gesture on an occupied
+    // parameter replaces only the source gesture and deliberately preserves the
+    // player's axis, curve, range, sensitivity, smoothing and inversion setup.
     for (const auto& existing : getMappings (slotIndex))
     {
-        if (existing.sourceGesture == gesture && sameParameterTarget (existing, binding))
+        if (! sameParameterTarget (existing, binding))
+            continue;
+
+        if (existing.sourceGesture == gesture)
         {
             error = "This gesture is already mapped to that parameter.";
             return false;
         }
+
+        auto replacement = existing;
+        replacement.sourceGesture = gesture;
+        replacement.slotIndex = slotIndex;
+        replacement.pluginIdentifier = binding.pluginIdentifier;
+        replacement.parameterStableId = binding.parameterStableId;
+        replacement.parameterIndexFallback = binding.parameterIndexFallback;
+        replacement.parameterName = binding.parameterName;
+
+        // Close any active host automation gesture before changing ownership so
+        // the old source cannot leave an unmatched beginChangeGesture behind.
+        endHostGesture (slotIndex, existing);
+        runtimeStates.erase (existing.id.toString().toStdString());
+        if (! slots[static_cast<size_t> (slotIndex)]->updateMapping (replacement))
+        {
+            error = "The previous parameter mapping could not be replaced.";
+            return false;
+        }
+        return true;
     }
 
     slots[static_cast<size_t> (slotIndex)]->addMapping (binding);
