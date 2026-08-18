@@ -7,25 +7,38 @@ namespace
 {
 using namespace gr;
 namespace ui = gr::ui;
+namespace metrics = gr::ui::metrics;
 
 constexpr std::array<std::pair<int, int>, 21> handConnections {{
     {0,1}, {1,2}, {2,3}, {3,4}, {0,5}, {5,6}, {6,7}, {7,8}, {5,9}, {9,10}, {10,11}, {11,12},
     {9,13}, {13,14}, {14,15}, {15,16}, {13,17}, {17,18}, {18,19}, {19,20}, {17,0}
 }};
 
-constexpr int outerMargin = 18;
-constexpr int headerHeight = 52;
-constexpr int footerHeight = 48;
-constexpr int layoutGap = 12;
-constexpr int railWidth = 168;
-constexpr int cameraColumnWidth = 326;
-constexpr int gesturePanelHeight = 178;
-constexpr int pluginHeaderHeight = 42;
-constexpr int minimumParameterHeight = 228;
-constexpr int minimumEditorWidth = 1120;
-constexpr int minimumEditorHeight = 720;
-constexpr int defaultEditorWidth = 1440;
-constexpr int defaultEditorHeight = 900;
+struct GestureCardDescriptor
+{
+    gr::ControlGesture gesture = gr::ControlGesture::unknown;
+    const char* label = "";
+    ui::Icon icon = ui::Icon::palm;
+    bool enabled = false;
+};
+
+const std::array<GestureCardDescriptor, 8>& gestureCards()
+{
+    // The reference has eight visual slots. The current vision protocol only exposes seven
+    // source IDs, so the extra UP cell deliberately remains an inert/empty panel instead of
+    // aliasing THUMB UP and creating two cards for one backend gesture.
+    static const std::array<GestureCardDescriptor, 8> cards {{
+        { gr::ControlGesture::openPalm,   "PALM",      ui::Icon::palm,       true },
+        { gr::ControlGesture::closedFist, "FIST",      ui::Icon::fist,       true },
+        { gr::ControlGesture::victory,    "VICTORY",   ui::Icon::victory,    true },
+        { gr::ControlGesture::thumbUp,    "THUMB UP",  ui::Icon::thumbUp,    true },
+        { gr::ControlGesture::unknown,    "",          ui::Icon::arrowUp,    false },
+        { gr::ControlGesture::thumbDown,  "DOWN",      ui::Icon::arrowDown,  true },
+        { gr::ControlGesture::thumbLeft,  "LEFT",      ui::Icon::arrowLeft,  true },
+        { gr::ControlGesture::thumbRight, "RIGHT",     ui::Icon::arrowRight, true }
+    }};
+    return cards;
+}
 
 bool handRolesTrusted (const gr::DualHandVisionSnapshot& snapshot)
 {
@@ -35,15 +48,18 @@ bool handRolesTrusted (const gr::DualHandVisionSnapshot& snapshot)
     return source.isNotEmpty() && source != "UNCALIBRATED" && source != "CALIBRATING" && source != "DEFAULT";
 }
 
-void drawDashedPath (juce::Graphics& g, const juce::Path& source, juce::Colour colour,
-                     float thickness = 1.0f, float dash = 4.0f, float gap = 4.0f)
+juce::Colour cameraStatusColour (bool connected, const gr::DualHandVisionSnapshot& snapshot)
 {
-    const float pattern[] { dash, gap };
-    juce::Path dashed;
-    juce::PathStrokeType (thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded)
-        .createDashedStroke (dashed, source, pattern, 2);
-    g.setColour (colour);
-    g.fillPath (dashed);
+    if (! connected) return ui::textMuted.withAlpha (0.62f);
+    const auto age = snapshot.receivedAtMs > 0
+        ? juce::Time::currentTimeMillis() - snapshot.receivedAtMs : int64_t { 1000000 };
+    if (snapshot.handCalibrationActive || age < 0 || age > 300) return ui::accent;
+    return ui::statusGreen;
+}
+
+int scaledMetric (float scale, int value)
+{
+    return juce::jmax (1, juce::roundToInt (static_cast<float> (value) * scale));
 }
 }
 
@@ -58,20 +74,17 @@ public:
             syncNativeSize();
             return;
         }
-
         detach();
         name = std::move (pluginName);
         nativeEditor = editor;
-        if (editor != nullptr)
-            addAndMakeVisible (*editor);
+        if (editor != nullptr) addAndMakeVisible (*editor);
         syncNativeSize();
         repaint();
     }
 
     void detach()
     {
-        if (auto* editor = nativeEditor.getComponent())
-            removeChildComponent (editor);
+        if (auto* editor = nativeEditor.getComponent()) removeChildComponent (editor);
         nativeEditor = nullptr;
         name.clear();
         nativeSize = {};
@@ -106,11 +119,10 @@ public:
         g.fillAll (ui::viewport);
         if (nativeEditor == nullptr)
         {
-            auto area = getLocalBounds().reduced (24);
             g.setColour (ui::textMuted);
             g.setFont (ui::controlFont());
             g.drawText (name.isNotEmpty() ? "NO NATIVE EDITOR" : "NO DEVICE",
-                        area, juce::Justification::centred);
+                        getLocalBounds().reduced (24), juce::Justification::centred);
         }
     }
 
@@ -138,10 +150,8 @@ private:
             desired.x = juce::jmax (desired.x, 560);
             desired.y = juce::jmax (desired.y, 260);
         }
-        if (getWidth() != desired.x || getHeight() != desired.y)
-            setSize (desired.x, desired.y);
-        else
-            resized();
+        if (getWidth() != desired.x || getHeight() != desired.y) setSize (desired.x, desired.y);
+        else resized();
     }
 
     juce::Component::SafePointer<juce::AudioProcessorEditor> nativeEditor;
@@ -165,110 +175,127 @@ public:
     void paint (juce::Graphics& g) override
     {
         ui::drawPanel (g, getLocalBounds().toFloat(), true);
-        ui::drawSectionTitle (g, "GESTURES", { 12, 8, 130, 20 });
+        ui::drawSectionTitle (g, "GESTURES", { 14, 9, juce::jmax (80, getWidth() - 72), 22 });
 
-        const auto enabled = owner.processor.isGestureEnabled();
-        const auto enableFocus = juce::jmax (enableHover, enabled ? 1.0f : 0.0f);
-        g.setColour (ui::blend (ui::control, ui::canvas, enableHover * 0.32f));
-        g.fillRoundedRectangle (enableRect.toFloat(), ui::controlRadius);
-        g.setColour (ui::blend (ui::border, ui::accent, enableFocus));
-        g.drawRoundedRectangle (enableRect.toFloat().reduced (0.5f), ui::controlRadius, 1.0f);
-        g.setColour (enabled ? ui::accent : ui::textMuted);
-        g.setFont (ui::controlFont());
-        g.drawText (enabled ? "ON" : "OFF", enableRect, juce::Justification::centred);
+        const auto gestureEnabled = owner.processor.isGestureEnabled();
+        const auto powerHot = enableRect.contains (pointer);
+        g.setColour (powerHot ? ui::controlHigh : ui::control);
+        g.fillRoundedRectangle (enableRect.toFloat(), ui::metrics::controlRadius);
+        g.setColour (gestureEnabled ? ui::accent : (powerHot ? ui::textMuted : ui::border));
+        g.drawRoundedRectangle (enableRect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 1.0f);
+        ui::drawIcon (g, ui::Icon::power, enableRect.reduced (9).toFloat(),
+                      gestureEnabled ? ui::accent : ui::textMuted, 1.6f);
 
-        const std::array<gr::ControlGesture, 7> gestures {
-            gr::ControlGesture::openPalm, gr::ControlGesture::closedFist, gr::ControlGesture::victory,
-            gr::ControlGesture::thumbUp, gr::ControlGesture::thumbDown,
-            gr::ControlGesture::pointRight, gr::ControlGesture::pointLeft };
         const auto live = owner.processor.getLiveRightGesture();
-
-        for (int i = 0; i < 7; ++i)
+        const auto& cards = gestureCards();
+        for (int i = 0; i < static_cast<int> (cards.size()); ++i)
         {
-            const auto gesture = gestures[static_cast<size_t> (i)];
+            const auto& descriptor = cards[static_cast<size_t> (i)];
             const auto rect = chipRects[static_cast<size_t> (i)];
             if (rect.isEmpty()) continue;
-            const auto liveAmount = gesture == live ? 1.0f : 0.0f;
-            const auto focus = juce::jmax (hover[static_cast<size_t> (i)], liveAmount);
-            auto fill = ui::blend (ui::control, ui::canvas, hover[static_cast<size_t> (i)] * 0.36f);
-            if (liveAmount > 0.0f) fill = ui::blend (fill, ui::accent, 0.08f);
+            const auto liveCard = descriptor.enabled && descriptor.gesture == live;
+            const auto hot = descriptor.enabled && rect.contains (pointer);
+            const auto dragSource = dragging && descriptor.gesture == draggedGesture;
+            auto fill = hot ? ui::controlHigh : ui::control;
+            if (liveCard || dragSource) fill = ui::blend (fill, ui::accent, 0.055f);
             g.setColour (fill);
-            g.fillRoundedRectangle (rect.toFloat(), ui::controlRadius);
-            g.setColour (ui::blend (ui::border, ui::accent, focus));
-            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::controlRadius, 1.0f);
-            g.setColour (liveAmount > 0.0f ? ui::accent : ui::text);
-            g.setFont (ui::font (9.6f, juce::Font::bold));
-            g.drawFittedText (gr::controlGestureToShortLabel (gesture), rect.reduced (4, 0),
-                              juce::Justification::centred, 1);
+            g.fillRoundedRectangle (rect.toFloat(), ui::metrics::cardRadius);
+            g.setColour (liveCard || dragSource ? ui::accent
+                                               : (descriptor.enabled ? ui::border : ui::border.withAlpha (0.62f)));
+            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::cardRadius, 1.0f);
+
+            if (! descriptor.enabled) continue;
+            auto iconArea = rect.reduced (10, 8);
+            auto labelArea = iconArea.removeFromBottom (22);
+            iconArea.removeFromBottom (2);
+            ui::drawIcon (g, descriptor.icon, iconArea.withSizeKeepingCentre (34, 34).toFloat(),
+                          liveCard || dragSource ? ui::accent : ui::text, 1.7f);
+            g.setColour (liveCard || dragSource ? ui::accent : ui::text);
+            g.setFont (ui::controlFont());
+            g.drawFittedText (descriptor.label, labelArea, juce::Justification::centred, 1);
         }
 
-        const auto drawTarget = [&] (juce::Rectangle<int> rect, const juce::String& label)
+        const auto drawBottomButton = [&] (juce::Rectangle<int> rect, ui::Icon icon,
+                                           const juce::String& label, bool accentState)
         {
-            const auto hot = dragging && rect.contains (dragPoint);
-            g.setColour (ui::blend (ui::surfaceHigh, ui::canvas, hot ? 0.25f : 0.0f));
-            g.fillRoundedRectangle (rect.toFloat(), ui::controlRadius);
-            g.setColour (hot ? ui::accent : ui::border);
-            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::controlRadius, 1.0f);
-            g.setColour (hot ? ui::accent : ui::textMuted);
-            g.setFont (ui::font (9.0f, juce::Font::bold));
-            g.drawText (label, rect, juce::Justification::centred);
+            const auto hot = rect.contains (pointer) || (dragging && rect.contains (dragPoint));
+            g.setColour (hot ? ui::controlHigh : ui::control);
+            g.fillRoundedRectangle (rect.toFloat(), ui::metrics::controlRadius);
+            g.setColour (accentState || (dragging && rect.contains (dragPoint)) ? ui::accent
+                                                                               : (hot ? ui::textMuted : ui::border));
+            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 1.0f);
+            auto content = rect.reduced (12, 6);
+            auto iconArea = content.removeFromLeft (32).withSizeKeepingCentre (22, 22);
+            ui::drawIcon (g, icon, iconArea.toFloat(), accentState ? ui::accent : ui::text, 1.55f);
+            g.setColour (ui::text);
+            g.setFont (ui::controlFont());
+            g.drawFittedText (label, content, juce::Justification::centred, 1);
         };
-        drawTarget (activeRect, "ACTIVE");
-        drawTarget (bypassRect, "BYPASS");
+        drawBottomButton (bypassRect, ui::Icon::bypass, "BYPASS", owner.processor.isSlotBypassed (owner.processor.getSelectedSlot()));
+        drawBottomButton (calibrateRect, ui::Icon::calibrate,
+                          owner.processor.getDualHandVisionSnapshot().handCalibrationActive ? "CALIBRATING" : "CALIBRATE",
+                          owner.processor.getDualHandVisionSnapshot().handCalibrationActive);
 
         if (dragging)
         {
-            auto bubble = juce::Rectangle<float> (74.0f, 22.0f).withCentre (dragPoint.toFloat());
+            auto bubble = juce::Rectangle<float> (86.0f, 28.0f).withCentre (dragPoint.toFloat());
             bubble = bubble.constrainedWithin (getLocalBounds().toFloat().reduced (2.0f));
-            g.setColour (ui::canvas.withAlpha (0.92f));
+            g.setColour (ui::canvas.withAlpha (0.96f));
             g.fillRoundedRectangle (bubble, 6.0f);
             g.setColour (ui::accent);
             g.drawRoundedRectangle (bubble, 6.0f, 1.0f);
-            g.setFont (ui::font (9.0f, juce::Font::bold));
-            g.drawText (gr::controlGestureToShortLabel (draggedGesture), bubble.toNearestInt(),
-                        juce::Justification::centred);
+            g.setColour (ui::accent);
+            g.setFont (ui::controlFont());
+            juce::String label;
+            for (const auto& card : cards)
+                if (card.gesture == draggedGesture && card.enabled) label = card.label;
+            g.drawFittedText (label, bubble.toNearestInt().reduced (4, 0), juce::Justification::centred, 1);
         }
     }
 
     void resized() override
     {
-        auto content = getLocalBounds().reduced (12);
-        auto header = content.removeFromTop (22);
-        enableRect = header.removeFromRight (48);
+        auto content = getLocalBounds().reduced (14);
+        auto header = content.removeFromTop (28);
+        enableRect = header.removeFromRight (42);
         content.removeFromTop (8);
 
-        const auto setRow = [this] (juce::Rectangle<int> row, int start, int count)
+        auto bottom = content.removeFromBottom (56);
+        content.removeFromBottom (10);
+        const auto rowGap = 8;
+        auto firstRow = content.removeFromTop ((content.getHeight() - rowGap) / 2);
+        content.removeFromTop (rowGap);
+        auto secondRow = content;
+
+        const auto layoutRow = [this] (juce::Rectangle<int> row, int start)
         {
-            constexpr int gap = 5;
-            const auto width = juce::jmax (1, (row.getWidth() - gap * (count - 1)) / count);
-            for (int i = 0; i < count; ++i)
+            constexpr int gap = 8;
+            const auto width = juce::jmax (1, (row.getWidth() - gap * 3) / 4);
+            for (int i = 0; i < 4; ++i)
             {
                 chipRects[static_cast<size_t> (start + i)] = row.removeFromLeft (width);
-                if (i + 1 < count) row.removeFromLeft (gap);
+                if (i < 3) row.removeFromLeft (gap);
             }
         };
+        layoutRow (firstRow, 0);
+        layoutRow (secondRow, 4);
 
-        setRow (content.removeFromTop (29), 0, 4);
-        content.removeFromTop (5);
-        setRow (content.removeFromTop (29), 4, 3);
-        content.removeFromTop (9);
-
-        auto targets = content.removeFromTop (27);
-        activeRect = targets.removeFromLeft ((targets.getWidth() - 6) / 2);
-        targets.removeFromLeft (6);
-        bypassRect = targets;
+        const auto gap = 10;
+        bypassRect = bottom.removeFromLeft ((bottom.getWidth() - gap) / 2);
+        bottom.removeFromLeft (gap);
+        calibrateRect = bottom;
     }
 
     void mouseMove (const juce::MouseEvent& e) override
     {
         pointer = e.getPosition();
-        updateHoverTargets();
+        repaint();
     }
 
     void mouseExit (const juce::MouseEvent&) override
     {
         pointer = { -9999, -9999 };
-        updateHoverTargets();
+        repaint();
     }
 
     void mouseDown (const juce::MouseEvent& e) override
@@ -280,20 +307,39 @@ public:
             repaint();
             return;
         }
+        if (bypassRect.contains (pointer))
+        {
+            const auto slot = owner.processor.getSelectedSlot();
+            if (owner.processor.isSlotLoaded (slot))
+                owner.processor.setSlotBypassed (slot, ! owner.processor.isSlotBypassed (slot));
+            owner.updateSlotButtons();
+            owner.repaint();
+            repaint();
+            return;
+        }
+        if (calibrateRect.contains (pointer))
+        {
+            const auto vision = owner.processor.getDualHandVisionSnapshot();
+            if (vision.handCalibrationActive) owner.processor.cancelHandCalibration();
+            else owner.processor.beginHandCalibration();
+            repaint();
+            return;
+        }
 
-        const std::array<gr::ControlGesture, 7> gestures {
-            gr::ControlGesture::openPalm, gr::ControlGesture::closedFist, gr::ControlGesture::victory,
-            gr::ControlGesture::thumbUp, gr::ControlGesture::thumbDown,
-            gr::ControlGesture::pointRight, gr::ControlGesture::pointLeft };
-        for (int i = 0; i < 7; ++i)
+        const auto& cards = gestureCards();
+        for (int i = 0; i < static_cast<int> (cards.size()); ++i)
+        {
+            const auto& card = cards[static_cast<size_t> (i)];
+            if (! card.enabled || card.gesture == gr::ControlGesture::unknown) continue;
             if (chipRects[static_cast<size_t> (i)].contains (pointer))
             {
-                draggedGesture = gestures[static_cast<size_t> (i)];
+                draggedGesture = card.gesture;
                 dragging = true;
                 dragPoint = pointer;
                 repaint();
-                break;
+                return;
             }
+        }
     }
 
     void mouseDrag (const juce::MouseEvent& e) override
@@ -307,154 +353,156 @@ public:
         else
             owner.parameterInspector.clearGestureDragPreview();
         repaint();
+        owner.repaint();
     }
 
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (! dragging) return;
         dragPoint = e.getPosition();
-        juce::String error;
-        if (activeRect.contains (dragPoint))
-            owner.processor.addSlotActionGestureMapping (draggedGesture, gr::MappingMode::triggerSetActive, error);
-        else if (bypassRect.contains (dragPoint))
-            owner.processor.addSlotActionGestureMapping (draggedGesture, gr::MappingMode::triggerSetBypassed, error);
-        else
+        const auto ownerPoint = owner.getLocalPoint (this, dragPoint);
+
+        if (bypassRect.contains (dragPoint))
         {
-            const auto ownerPoint = owner.getLocalPoint (this, dragPoint);
-            if (owner.parameterInspector.getBounds().contains (ownerPoint))
-                owner.parameterInspector.dropGestureAt (
-                    draggedGesture, owner.parameterInspector.getLocalPoint (&owner, ownerPoint));
+            owner.parameterInspector.assignSlotActionGesture (draggedGesture, gr::MappingMode::triggerSetBypassed);
+        }
+        else if (owner.bypassButton.getBounds().contains (ownerPoint))
+        {
+            // Preserve main's one-way Set Active behavior. The reference no longer needs a
+            // second visible slot-action target because ACTIVE itself is the drop target.
+            owner.parameterInspector.assignSlotActionGesture (draggedGesture, gr::MappingMode::triggerSetActive);
+        }
+        else if (owner.parameterInspector.getBounds().contains (ownerPoint))
+        {
+            owner.parameterInspector.dropGestureAt (
+                draggedGesture, owner.parameterInspector.getLocalPoint (&owner, ownerPoint));
         }
 
         owner.parameterInspector.clearGestureDragPreview();
         dragging = false;
         draggedGesture = gr::ControlGesture::unknown;
-        updateHoverTargets();
         repaint();
+        owner.repaint();
     }
 
 private:
-    void updateHoverTargets()
-    {
-        enableHoverTarget = enableRect.contains (pointer) ? 1.0f : 0.0f;
-        for (int i = 0; i < 7; ++i)
-            hoverTarget[static_cast<size_t> (i)] = chipRects[static_cast<size_t> (i)].contains (pointer) ? 1.0f : 0.0f;
-    }
-
-    void timerCallback() override
-    {
-        bool needsRepaint = false;
-        const auto move = [&needsRepaint] (float& value, float target)
-        {
-            const auto speed = target > value ? 0.22f : 0.15f;
-            const auto next = value + (target - value) * speed;
-            if (std::abs (next - value) > 0.001f) needsRepaint = true;
-            value = std::abs (target - next) < 0.008f ? target : next;
-        };
-        move (enableHover, enableHoverTarget);
-        for (int i = 0; i < 7; ++i)
-            move (hover[static_cast<size_t> (i)], hoverTarget[static_cast<size_t> (i)]);
-        if (needsRepaint || dragging) repaint();
-    }
+    void timerCallback() override { repaint(); }
 
     GestureRackAudioProcessorEditor& owner;
-    std::array<juce::Rectangle<int>, 7> chipRects {};
-    std::array<float, 7> hover {};
-    std::array<float, 7> hoverTarget {};
+    std::array<juce::Rectangle<int>, 8> chipRects {};
     juce::Rectangle<int> enableRect;
-    juce::Rectangle<int> activeRect;
     juce::Rectangle<int> bypassRect;
+    juce::Rectangle<int> calibrateRect;
     juce::Point<int> pointer { -9999, -9999 };
     juce::Point<int> dragPoint;
-    float enableHover = 0.0f;
-    float enableHoverTarget = 0.0f;
     bool dragging = false;
     gr::ControlGesture draggedGesture = gr::ControlGesture::unknown;
 };
 
-void GestureRackAudioProcessorEditor::RackSlotButton::setSlotVisualState (
-    int slotNumberToUse, bool loadedToUse, bool bypassedToUse, int mappingCountToUse, juce::String pluginNameToUse)
+GestureRackAudioProcessorEditor::RackSlotButton::RackSlotButton()
+    : juce::Button ("Rack slot")
 {
-    slotNumber = slotNumberToUse;
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void GestureRackAudioProcessorEditor::RackSlotButton::setSlotVisualState (
+    bool loadedToUse, bool bypassedToUse, juce::String pluginNameToUse)
+{
     loaded = loadedToUse;
     bypassed = bypassedToUse;
-    mappingCount = mappingCountToUse;
     pluginName = std::move (pluginNameToUse);
     repaint();
 }
 
-void GestureRackAudioProcessorEditor::RackSlotButton::paintButton (juce::Graphics& g, bool, bool down)
+void GestureRackAudioProcessorEditor::RackSlotButton::resized()
 {
-    const auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+    powerRect = getLocalBounds().removeFromRight (42).reduced (8);
+}
+
+void GestureRackAudioProcessorEditor::RackSlotButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (0.5f);
     const auto selected = getToggleState();
-    const auto focus = juce::jmax (getHoverAmount(), selected ? 1.0f : 0.0f);
-    auto fill = ui::blend (ui::surfaceHigh, ui::canvas, getHoverAmount() * 0.36f);
-    if (selected) fill = ui::blend (fill, ui::accent, 0.075f);
-    if (down) fill = ui::blend (fill, ui::canvas, 0.28f);
+    auto fill = highlighted ? ui::controlHigh : ui::surfaceHigh;
+    if (selected) fill = ui::blend (fill, ui::accent, 0.045f);
+    if (down) fill = ui::blend (fill, ui::canvas, 0.18f);
     g.setColour (fill);
-    g.fillRoundedRectangle (bounds, 8.0f);
+    g.fillRoundedRectangle (bounds, ui::metrics::cardRadius);
 
-    const auto line = ui::blend (ui::border, ui::accent, focus);
-    if (! loaded)
+    const auto edge = selected ? ui::accent : ui::border;
+    if (loaded)
     {
-        juce::Path outline;
-        outline.addRoundedRectangle (bounds.reduced (1.0f), 8.0f);
-        drawDashedPath (g, outline, line.withAlpha (0.88f), 1.0f, 5.0f, 4.0f);
-
-        auto plusBounds = bounds.withSizeKeepingCentre (30.0f, 30.0f);
-        juce::Path plus;
-        plus.startNewSubPath (plusBounds.getCentreX(), plusBounds.getY() + 3.0f);
-        plus.lineTo (plusBounds.getCentreX(), plusBounds.getBottom() - 3.0f);
-        plus.startNewSubPath (plusBounds.getX() + 3.0f, plusBounds.getCentreY());
-        plus.lineTo (plusBounds.getRight() - 3.0f, plusBounds.getCentreY());
-        drawDashedPath (g, plus, selected ? ui::accent : ui::gray.withAlpha (0.82f), 1.5f, 3.0f, 2.5f);
+        g.setColour (edge);
+        g.drawRoundedRectangle (bounds, ui::metrics::cardRadius, 1.0f);
+        auto content = getLocalBounds().reduced (12, 5);
+        auto power = content.removeFromRight (32);
+        content.removeFromRight (7);
+        g.setColour (bypassed ? ui::textMuted : ui::text);
+        g.setFont (ui::rowFont());
+        g.drawFittedText (pluginName, content, juce::Justification::centredLeft, 1);
+        ui::drawIcon (g, ui::Icon::power, power.withSizeKeepingCentre (18, 18).toFloat(),
+                      bypassed ? ui::textMuted : ui::accent, 1.55f);
     }
     else
     {
-        g.setColour (line);
-        g.drawRoundedRectangle (bounds, 8.0f, 1.0f);
+        ui::drawDashedRoundedRect (g, bounds.reduced (0.5f), ui::metrics::cardRadius,
+                                   selected ? ui::accent : ui::border, 1.0f, 5.0f, 4.0f);
+        g.setColour (selected ? ui::accent : ui::textMuted);
+        g.setFont (ui::font (24.0f));
+        g.drawText ("+", getLocalBounds(), juce::Justification::centred);
     }
+}
 
-    auto inner = getLocalBounds().reduced (10, 7);
-    auto numberArea = inner.removeFromTop (15);
-    g.setFont (ui::font (9.0f, juce::Font::bold));
-    g.setColour (selected ? ui::accent : ui::textMuted);
-    g.drawText ("0" + juce::String (slotNumber), numberArea, juce::Justification::centredLeft);
+void GestureRackAudioProcessorEditor::RackSlotButton::mouseDown (const juce::MouseEvent& e)
+{
+    juce::Button::mouseDown (e);
+    powerPressed = loaded && powerRect.contains (e.getPosition());
+    bodyPressed = ! powerPressed;
+    if (powerPressed) return;
+    if (bodyClick) bodyClick();
+    if (loaded && dragDown) dragDown (e);
+}
 
-    if (loaded)
-    {
-        auto footer = inner.removeFromBottom (14);
-        g.setFont (ui::font (11.0f, juce::Font::bold));
-        g.setColour (bypassed ? ui::textMuted : ui::text);
-        g.drawFittedText (pluginName, inner, juce::Justification::centredLeft, 2);
+void GestureRackAudioProcessorEditor::RackSlotButton::mouseDrag (const juce::MouseEvent& e)
+{
+    juce::Button::mouseDrag (e);
+    if (bodyPressed && loaded && dragMove) dragMove (e);
+}
 
-        g.setFont (ui::metaFont());
-        g.setColour (ui::textMuted);
-        if (bypassed)
-            g.drawText ("BYP", footer.removeFromLeft (34), juce::Justification::centredLeft);
-        if (mappingCount > 0)
-            g.drawText (juce::String (mappingCount) + " MAP", footer, juce::Justification::centredRight);
-    }
+void GestureRackAudioProcessorEditor::RackSlotButton::mouseUp (const juce::MouseEvent& e)
+{
+    if (powerPressed && powerRect.contains (e.getPosition()) && powerClick) powerClick();
+    else if (bodyPressed && loaded && dragUp) dragUp (e);
+    bodyPressed = false;
+    powerPressed = false;
+    juce::Button::mouseUp (e);
 }
 
 GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAudioProcessor& p)
     : juce::AudioProcessorEditor (&p), processor (p), parameterInspector (p)
 {
-    setSize (defaultEditorWidth, defaultEditorHeight);
+    setWantsKeyboardFocus (true);
+    setSize (metrics::defaultEditorWidth, metrics::defaultEditorHeight);
     setResizable (true, true);
-    setResizeLimits (minimumEditorWidth, minimumEditorHeight, 2600, 1800);
+    setResizeLimits (metrics::minimumEditorWidth, metrics::minimumEditorHeight, 3200, 2100);
 
     for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
     {
         auto& button = slotButtons[static_cast<size_t> (i)];
         addAndMakeVisible (button);
-        button.setClickingTogglesState (false);
-        button.setTriggeredOnMouseDown (true);
-        button.onClick = [this, i]
+        button.bodyClick = [this, i]
         {
             processor.setSelectedSlot (i);
             updateSlotButtons();
             updateEmbeddedEditor();
+            if (! processor.isSlotLoaded (i)) showPluginBrowserForSlot (i);
+            repaint();
+        };
+        button.powerClick = [this, i]
+        {
+            if (! processor.isSlotLoaded (i)) return;
+            processor.setSlotBypassed (i, ! processor.isSlotBypassed (i));
+            updateSlotButtons();
             repaint();
         };
         button.dragDown = [this, i] (const juce::MouseEvent& e) { handleSlotMouseDown (i, e); };
@@ -462,20 +510,40 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
         button.dragUp = [this] (const juce::MouseEvent& e) { handleSlotMouseUp (e); };
     }
 
-    for (auto* button : { &loadButton, &removeButton, &bypassButton, &calibrateHandsButton, &swapHandsButton })
-        addAndMakeVisible (*button);
+    addAndMakeVisible (railSearchButton);
+    addAndMakeVisible (railBrowserButton);
+    addAndMakeVisible (removeButton);
+    addAndMakeVisible (bypassButton);
+    addAndMakeVisible (pluginMoreButton);
+    addAndMakeVisible (loadButton);
+    addAndMakeVisible (calibrateHandsButton);
+    addAndMakeVisible (swapHandsButton);
+    addAndMakeVisible (settingsButton);
+    addAndMakeVisible (menuButton);
 
+    railSearchButton.onClick = [this] { showPluginBrowser(); };
+    railBrowserButton.onClick = [this] { showPluginBrowser(); };
     loadButton.onClick = [this] { showPluginBrowser(); };
     removeButton.onClick = [this] { removeSelectedPlugin(); };
     bypassButton.onClick = [this]
     {
         const auto slot = processor.getSelectedSlot();
+        if (! processor.isSlotLoaded (slot)) return;
         processor.setSlotBypassed (slot, ! processor.isSlotBypassed (slot));
         updateSlotButtons();
         repaint();
     };
+    pluginMoreButton.onClick = [this] { showPluginMoreMenu(); };
     calibrateHandsButton.onClick = [this] { processor.beginHandCalibration(); };
     swapHandsButton.onClick = [this] { processor.toggleSwapHandedness(); };
+    settingsButton.onClick = [this] { showSettingsMenu(); };
+    menuButton.onClick = [this] { showMainMenu(); };
+
+    settingsButton.setAccentWhenOn (false);
+    menuButton.setAccentWhenOn (false);
+    railSearchButton.setAccentWhenOn (false);
+    removeButton.setAccentWhenOn (false);
+    pluginMoreButton.setAccentWhenOn (false);
 
     addAndMakeVisible (parameterInspector);
 
@@ -484,7 +552,7 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     pluginViewport.setViewedComponent (embeddedCanvas.get(), false);
     pluginViewport.setScrollBarsShown (false, false);
     pluginViewport.setScrollBarThickness (8);
-    pluginViewport.setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.62f));
+    pluginViewport.setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.42f));
     pluginViewport.setColour (juce::ScrollBar::backgroundColourId, ui::viewport);
 
     gesturePanel = std::make_unique<GesturePanel> (*this);
@@ -530,14 +598,12 @@ void GestureRackAudioProcessorEditor::removeSelectedPlugin()
     lastNativeEditorSize = {};
     processor.removeSlotPlugin (processor.getSelectedSlot());
     updateSlotButtons();
-    adaptEditorToNativeSize (true);
     repaint();
 }
 
 void GestureRackAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
 {
     if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
-
     int targetSlot = processor.getSelectedSlot();
     for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
         if (slotButtons[static_cast<size_t> (i)].getBounds().contains (x, y))
@@ -571,6 +637,7 @@ void GestureRackAudioProcessorEditor::timerCallback()
     const auto connected = processor.isVisionConnected();
     const auto rolesTrusted = handRolesTrusted (vision);
     frameReader.readLatest (cameraFrame);
+    refreshCameraDisplay();
 
     bypassButton.setButtonText (bypassed ? "BYPASS" : "ACTIVE");
     bypassButton.setToggleState (loaded && ! bypassed, juce::dontSendNotification);
@@ -584,14 +651,43 @@ void GestureRackAudioProcessorEditor::timerCallback()
 
     updateSlotButtons();
     updateEmbeddedEditor();
-    if (gesturePanel != nullptr) gesturePanel->repaint();
     repaint();
+}
+
+void GestureRackAudioProcessorEditor::refreshCameraDisplay()
+{
+    if (! cameraFrame.isValid() || cameraFrame.sequence == cameraDisplaySequence) return;
+    cameraDisplaySequence = cameraFrame.sequence;
+    const auto sourceW = cameraFrame.image.getWidth();
+    const auto sourceH = cameraFrame.image.getHeight();
+    const auto previewW = juce::jmax (320, cameraPreviewBounds.getWidth() * 2);
+    const auto previewH = juce::jmax (220, cameraPreviewBounds.getHeight() * 2);
+    const auto scale = juce::jmin (1.0f, juce::jmin (static_cast<float> (previewW) / static_cast<float> (sourceW),
+                                                    static_cast<float> (previewH) / static_cast<float> (sourceH)));
+    const auto targetW = juce::jmax (1, juce::roundToInt (sourceW * scale));
+    const auto targetH = juce::jmax (1, juce::roundToInt (sourceH * scale));
+    cameraDisplayImage = (targetW == sourceW && targetH == sourceH)
+        ? cameraFrame.image.createCopy()
+        : cameraFrame.image.rescaled (targetW, targetH, juce::Graphics::ResamplingQuality::mediumResamplingQuality);
+    if (! cameraDisplayImage.isValid()) return;
+
+    juce::Image::BitmapData pixels (cameraDisplayImage, 0, 0,
+                                    cameraDisplayImage.getWidth(), cameraDisplayImage.getHeight(),
+                                    juce::Image::BitmapData::readWrite);
+    for (int y = 0; y < cameraDisplayImage.getHeight(); ++y)
+        for (int x = 0; x < cameraDisplayImage.getWidth(); ++x)
+        {
+            const auto c = pixels.getPixelColour (x, y);
+            const auto luma = juce::jlimit (0.0f, 1.0f,
+                c.getFloatRed() * 0.299f + c.getFloatGreen() * 0.587f + c.getFloatBlue() * 0.114f);
+            const auto muted = juce::Colour::fromFloatRGBA (luma * 0.88f, luma * 0.88f, luma * 0.88f, c.getFloatAlpha());
+            pixels.setPixelColour (x, y, muted);
+        }
 }
 
 void GestureRackAudioProcessorEditor::updateEmbeddedEditor()
 {
     if (embeddedCanvas == nullptr) return;
-
     const auto slot = processor.getSelectedSlot();
     const auto identity = processor.getSlotChildIdentity (slot);
     const auto identityChanged = slot != displayedSlot || identity != displayedChildIdentity;
@@ -602,10 +698,7 @@ void GestureRackAudioProcessorEditor::updateEmbeddedEditor()
         displayedSlot = slot;
         displayedChildIdentity = identity;
         if (identity != 0)
-        {
-            auto* native = processor.getOrCreateSlotEditor (slot);
-            embeddedCanvas->attach (native, processor.getSlotPluginName (slot));
-        }
+            embeddedCanvas->attach (processor.getOrCreateSlotEditor (slot), processor.getSlotPluginName (slot));
         else
             embeddedCanvas->attach (nullptr, {});
     }
@@ -615,57 +708,49 @@ void GestureRackAudioProcessorEditor::updateEmbeddedEditor()
     if (identityChanged || nativeChanged || nativeSize != lastNativeEditorSize)
     {
         lastNativeEditorSize = nativeSize;
+        if (nativeSize.x > 0) largestNativeEditorSize.x = juce::jmax (largestNativeEditorSize.x, nativeSize.x);
+        if (nativeSize.y > 0) largestNativeEditorSize.y = juce::jmax (largestNativeEditorSize.y, nativeSize.y);
         adaptEditorToNativeSize (true);
     }
-
     updateViewportScrollbars();
 }
 
 void GestureRackAudioProcessorEditor::adaptEditorToNativeSize (bool force)
 {
     if (adaptiveResizeInProgress || embeddedCanvas == nullptr) return;
-    const auto native = embeddedCanvas->getNativeEditorSize();
-    if (! force && native.x <= 0 && native.y <= 0) return;
-
-    const auto centerWidth = native.x > 0 ? juce::jmax (660, native.x + 28) : 760;
-    const auto pluginHeight = native.y > 0 ? juce::jmax (260, native.y + pluginHeaderHeight + 24) : 390;
-
-    constexpr int railMinimumWorkspaceHeight = 610;
-    constexpr int rightMinimumWorkspaceHeight = 610;
-    const auto centerWorkspaceHeight = pluginHeight + layoutGap + minimumParameterHeight;
-    const auto workspaceHeight = juce::jmax (railMinimumWorkspaceHeight,
-                                              juce::jmax (rightMinimumWorkspaceHeight, centerWorkspaceHeight));
-
-    auto desiredWidth = outerMargin * 2 + railWidth + layoutGap + centerWidth + layoutGap + cameraColumnWidth;
-    auto desiredHeight = outerMargin * 2 + headerHeight + layoutGap + workspaceHeight + layoutGap + footerHeight;
+    if (! force && largestNativeEditorSize.x <= 0 && largestNativeEditorSize.y <= 0) return;
 
     auto& displays = juce::Desktop::getInstance().getDisplays();
     const auto* display = displays.getDisplayForRect (getScreenBounds());
     if (display == nullptr) display = displays.getPrimaryDisplay();
-
-    int maxWidth = 2600;
-    int maxHeight = 1800;
+    int maxWidth = 3200;
+    int maxHeight = 2100;
     if (display != nullptr)
     {
         const auto user = display->userBounds.toNearestInt();
-        maxWidth = juce::jmax (minimumEditorWidth, juce::roundToInt (user.getWidth() * 0.96f));
-        maxHeight = juce::jmax (minimumEditorHeight, juce::roundToInt (user.getHeight() * 0.94f));
+        maxWidth = juce::jmax (metrics::minimumEditorWidth, juce::roundToInt (user.getWidth() * 0.985f));
+        maxHeight = juce::jmax (metrics::minimumEditorHeight, juce::roundToInt (user.getHeight() * 0.965f));
     }
 
-    desiredWidth = juce::jlimit (minimumEditorWidth, maxWidth, desiredWidth);
-    desiredHeight = juce::jlimit (minimumEditorHeight, maxHeight, desiredHeight);
-    setResizeLimits (minimumEditorWidth, minimumEditorHeight, maxWidth, maxHeight);
+    const auto centerWidth = largestNativeEditorSize.x > 0 ? juce::jmax (900, largestNativeEditorSize.x + 30) : 980;
+    const auto upperHeight = largestNativeEditorSize.y > 0 ? juce::jmax (360, largestNativeEditorSize.y + 70) : 420;
+    const auto desiredWidth = scaledMetric (uiScale, metrics::outerMargin * 2 + 230 + metrics::gutter * 2 + 340) + centerWidth;
+    const auto desiredHeight = scaledMetric (uiScale, metrics::outerMargin * 2 + metrics::topBarHeight
+                                                   + metrics::footerHeight + metrics::gutter * 3)
+                             + upperHeight + scaledMetric (uiScale, 350);
 
-    if (getWidth() == desiredWidth && getHeight() == desiredHeight) return;
+    setResizeLimits (metrics::minimumEditorWidth, metrics::minimumEditorHeight, maxWidth, maxHeight);
+    const auto nextWidth = juce::jlimit (metrics::minimumEditorWidth, maxWidth, juce::jmax (getWidth(), desiredWidth));
+    const auto nextHeight = juce::jlimit (metrics::minimumEditorHeight, maxHeight, juce::jmax (getHeight(), desiredHeight));
+    if (nextWidth == getWidth() && nextHeight == getHeight()) return;
     adaptiveResizeInProgress = true;
-    setSize (desiredWidth, desiredHeight);
+    setSize (nextWidth, nextHeight);
     adaptiveResizeInProgress = false;
 }
 
 void GestureRackAudioProcessorEditor::updateViewportScrollbars()
 {
     if (embeddedCanvas == nullptr || pluginViewport.getWidth() <= 0 || pluginViewport.getHeight() <= 0) return;
-
     const auto visible = juce::Point<int> (pluginViewport.getWidth(), pluginViewport.getHeight());
     embeddedCanvas->setMinimumCanvasSize (visible);
     const auto native = embeddedCanvas->getNativeEditorSize();
@@ -674,9 +759,12 @@ void GestureRackAudioProcessorEditor::updateViewportScrollbars()
     pluginViewport.setScrollBarsShown (needVertical, needHorizontal, false, false);
 }
 
-void GestureRackAudioProcessorEditor::showPluginBrowser()
+void GestureRackAudioProcessorEditor::showPluginBrowserForSlot (int slotIndex)
 {
     if (pluginBrowser == nullptr) return;
+    processor.setSelectedSlot (juce::jlimit (0, GestureRackAudioProcessor::slotCount - 1, slotIndex));
+    updateSlotButtons();
+    updateEmbeddedEditor();
     parameterInspector.clearGestureDragPreview();
     slotDragging = false;
     slotDragSource = slotDragTarget = -1;
@@ -684,10 +772,124 @@ void GestureRackAudioProcessorEditor::showPluginBrowser()
     repaint();
 }
 
+void GestureRackAudioProcessorEditor::showPluginBrowser()
+{
+    showPluginBrowserForSlot (processor.getSelectedSlot());
+}
+
 void GestureRackAudioProcessorEditor::hidePluginBrowser()
 {
     if (pluginBrowser != nullptr) pluginBrowser->setVisible (false);
+    grabKeyboardFocus();
     repaint();
+}
+
+void GestureRackAudioProcessorEditor::showSettingsMenu()
+{
+    const auto snapshot = processor.getDualHandVisionSnapshot();
+    const auto connected = processor.isVisionConnected();
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Diagnostics");
+    menu.addItem (101, connected ? "CAMERA  ONLINE" : "CAMERA  OFFLINE", false);
+    menu.addItem (102, "BACKEND  " + (snapshot.cameraBackend.isNotEmpty() ? snapshot.cameraBackend : juce::String ("--")), false);
+    menu.addItem (103, "CAPTURE  " + juce::String (snapshot.captureFps, 1) + " FPS", false);
+    menu.addItem (104, "VISION  " + juce::String (snapshot.visionFps, 1) + " FPS", false);
+    menu.addItem (105, "CAPTURE -> RESULT  " + juce::String (snapshot.captureToResultMs, 1) + " ms", false);
+    const auto sr = processor.getHostSampleRateForUi();
+    const auto bs = processor.getHostBlockSizeForUi();
+    menu.addItem (106, "AUDIO  " + (sr > 0.0 ? juce::String (sr / 1000.0, 1) + " kHz" : juce::String ("--"))
+                        + " / " + (bs > 0 ? juce::String (bs) : juce::String ("--")), false);
+    juce::String handState;
+    if (! connected) handState = "OFFLINE";
+    else if (snapshot.handCalibrationActive) handState = "CALIBRATING";
+    else handState = handRolesTrusted (snapshot) ? "READY" : "CALIBRATE";
+    menu.addItem (107, "HAND  " + handState, false);
+    menu.addItem (108, "GESTURE  " + (snapshot.right.present
+        ? gr::controlGestureToShortLabel (snapshot.right.stableGesture) : juce::String ("--")), false);
+    menu.addItem (109, "SELECT  SLOT " + (snapshot.left.present && snapshot.left.stableSlot > 0
+        ? juce::String (snapshot.left.stableSlot) : juce::String ("--")), false);
+    menu.addSeparator();
+    menu.addItem (1, "Show hand landmarks", true, showCameraLandmarks);
+    menu.addSeparator();
+    menu.addSectionHeader ("UI Scale");
+    menu.addItem (90, "90%", true, std::abs (uiScale - 0.90f) < 0.01f);
+    menu.addItem (100, "100%", true, std::abs (uiScale - 1.00f) < 0.01f);
+    menu.addItem (110, "110%", true, std::abs (uiScale - 1.10f) < 0.01f);
+    menu.addItem (125, "125%", true, std::abs (uiScale - 1.25f) < 0.01f);
+
+    juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton),
+                        [safe] (int result)
+                        {
+                            if (safe == nullptr || result == 0) return;
+                            if (result == 1)
+                            {
+                                safe->showCameraLandmarks = ! safe->showCameraLandmarks;
+                                safe->repaint();
+                            }
+                            else if (result == 90 || result == 100 || result == 110 || result == 125)
+                                safe->setUiScale (static_cast<float> (result) / 100.0f);
+                        });
+}
+
+void GestureRackAudioProcessorEditor::showMainMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, "Plugin Browser");
+    menu.addItem (2, "Scan / Paths...");
+    menu.addSeparator();
+    menu.addItem (3, "About Gesture Rack");
+    juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuButton),
+                        [safe] (int result)
+                        {
+                            if (safe == nullptr || result == 0) return;
+                            if (result == 1 || result == 2) safe->showPluginBrowser();
+                            else if (result == 3)
+                                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                                                                        "Gesture Rack",
+                                                                        "Gesture Rack\nGesture-controlled VST3 effect rack.");
+                        });
+}
+
+void GestureRackAudioProcessorEditor::showPluginMoreMenu()
+{
+    const auto slot = processor.getSelectedSlot();
+    juce::PopupMenu menu;
+    menu.addSectionHeader (processor.isSlotLoaded (slot) ? processor.getSlotPluginName (slot) : "EMPTY SLOT");
+    menu.addItem (1, "Replace / Load Plugin...");
+    menu.addItem (2, "Remove Plugin", processor.isSlotLoaded (slot));
+    menu.addSeparator();
+    menu.addItem (3, "Diagnostics...");
+    juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pluginMoreButton),
+                        [safe] (int result)
+                        {
+                            if (safe == nullptr || result == 0) return;
+                            if (result == 1) safe->showPluginBrowser();
+                            else if (result == 2) safe->removeSelectedPlugin();
+                            else if (result == 3) safe->showSettingsMenu();
+                        });
+}
+
+void GestureRackAudioProcessorEditor::setUiScale (float newScale)
+{
+    newScale = juce::jlimit (0.90f, 1.25f, newScale);
+    if (std::abs (newScale - uiScale) < 0.001f) return;
+    const auto ratio = newScale / uiScale;
+    uiScale = newScale;
+    auto& displays = juce::Desktop::getInstance().getDisplays();
+    const auto* display = displays.getDisplayForRect (getScreenBounds());
+    if (display == nullptr) display = displays.getPrimaryDisplay();
+    auto maxW = 3200;
+    auto maxH = 2100;
+    if (display != nullptr)
+    {
+        maxW = juce::roundToInt (display->userBounds.getWidth() * 0.985f);
+        maxH = juce::roundToInt (display->userBounds.getHeight() * 0.965f);
+    }
+    setSize (juce::jlimit (metrics::minimumEditorWidth, maxW, juce::roundToInt (getWidth() * ratio)),
+             juce::jlimit (metrics::minimumEditorHeight, maxH, juce::roundToInt (getHeight() * ratio)));
 }
 
 void GestureRackAudioProcessorEditor::updateSlotButtons()
@@ -696,15 +898,11 @@ void GestureRackAudioProcessorEditor::updateSlotButtons()
     for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
     {
         auto& button = slotButtons[static_cast<size_t> (i)];
-        const auto loaded = processor.isSlotLoaded (i);
-        const auto bypassed = processor.isSlotBypassed (i);
-        const auto mappingCount = processor.getSlotMappingCount (i);
         auto name = processor.getSlotPluginName (i);
-        if (name.length() > 18) name = name.substring (0, 16) + "..";
-        button.setSlotVisualState (i + 1, loaded, bypassed, mappingCount, name);
-        button.setTooltip ("Slot " + juce::String (i + 1) + " / " + processor.getSlotPluginName (i)
-                           + " / " + juce::String (mappingCount) + " mappings");
+        if (name.length() > 22) name = name.substring (0, 20) + "..";
+        button.setSlotVisualState (processor.isSlotLoaded (i), processor.isSlotBypassed (i), name);
         button.setToggleState (i == selected, juce::dontSendNotification);
+        button.setTooltip (processor.isSlotLoaded (i) ? processor.getSlotPluginName (i) : "Load plugin");
     }
 }
 
@@ -734,7 +932,6 @@ void GestureRackAudioProcessorEditor::handleSlotMouseUp (const juce::MouseEvent&
 {
     if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
     if (! juce::isPositiveAndBelow (slotDragSource, GestureRackAudioProcessor::slotCount)) return;
-
     if (slotDragging)
     {
         const auto point = e.getEventRelativeTo (this).getPosition();
@@ -749,7 +946,6 @@ void GestureRackAudioProcessorEditor::handleSlotMouseUp (const juce::MouseEvent&
             updateEmbeddedEditor();
         }
     }
-
     slotDragging = false;
     slotDragSource = slotDragTarget = -1;
     updateSlotButtons();
@@ -758,10 +954,8 @@ void GestureRackAudioProcessorEditor::handleSlotMouseUp (const juce::MouseEvent&
 
 int GestureRackAudioProcessorEditor::findNearestSlot (juce::Point<int> editorPoint) const
 {
-    if (slotButtons.empty()) return slotDragSource;
     auto rail = pluginRailBounds.expanded (18, 20);
     if (! rail.contains (editorPoint)) return slotDragSource;
-
     auto best = 0;
     auto bestDistance = std::numeric_limits<int>::max();
     for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
@@ -780,13 +974,11 @@ void GestureRackAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
 {
     if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
     if (! slotDragging || ! juce::isPositiveAndBelow (slotDragTarget, GestureRackAudioProcessor::slotCount)) return;
-
     const auto target = slotButtons[static_cast<size_t> (slotDragTarget)].getBounds();
     auto line = juce::Rectangle<float> (static_cast<float> (target.getX() + 8),
                                         static_cast<float> (target.getY() - 3),
                                         static_cast<float> (target.getWidth() - 16), 2.0f);
-    if (slotDragTarget > slotDragSource)
-        line.setY (static_cast<float> (target.getBottom() + 1));
+    if (slotDragTarget > slotDragSource) line.setY (static_cast<float> (target.getBottom() + 1));
     g.setColour (ui::accent);
     g.fillRoundedRectangle (line, 1.0f);
 }
@@ -795,79 +987,78 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (ui::canvas);
 
+    auto brand = topBarBounds;
+    auto logo = brand.removeFromLeft (36).withSizeKeepingCentre (26, 26);
+    ui::drawIcon (g, ui::Icon::hand, logo.toFloat(), ui::accent, 1.75f);
+    brand.removeFromLeft (2);
     g.setColour (ui::text);
-    g.setFont (ui::titleFont());
-    g.drawText ("GESTURE RACK", outerMargin, 10, 270, 30, juce::Justification::centredLeft);
+    g.setFont (ui::appTitleFont());
+    g.drawText ("GESTURE RACK", brand.removeFromLeft (240), juce::Justification::centredLeft);
 
     const auto snapshot = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
-    const auto rolesTrusted = handRolesTrusted (snapshot);
-    const auto sr = processor.getHostSampleRateForUi();
-    const auto bs = processor.getHostBlockSizeForUi();
-
-    juce::String health = connected
-        ? juce::String (snapshot.captureFps, 0) + " FPS  ·  " + juce::String (snapshot.captureToResultMs, 0) + " MS"
-        : juce::String ("VISION OFFLINE");
-    if (sr > 0.0 && bs > 0)
-        health += "  ·  " + juce::String (sr / 1000.0, 1) + "K / " + juce::String (bs);
-    g.setColour (connected && rolesTrusted ? ui::textMuted : ui::accent);
+    auto statusArea = topBarBounds;
+    statusArea.removeFromRight (settingsButton.getWidth() + menuButton.getWidth() + 16);
+    statusArea = statusArea.removeFromRight (150);
+    auto cameraIcon = statusArea.removeFromLeft (24).withSizeKeepingCentre (18, 18);
+    ui::drawIcon (g, ui::Icon::camera, cameraIcon.toFloat(), ui::textMuted, 1.45f);
+    auto dotArea = statusArea.removeFromLeft (18).withSizeKeepingCentre (8, 8).toFloat();
+    g.setColour (cameraStatusColour (connected, snapshot));
+    g.fillEllipse (dotArea);
+    g.setColour (connected ? ui::textMuted : ui::textMuted.withAlpha (0.58f));
     g.setFont (ui::metaFont());
-    g.drawFittedText (health, 300, 12, getWidth() - 318, 26, juce::Justification::centredRight, 1);
+    g.drawText (connected ? juce::String (snapshot.captureFps, 0) + " FPS" : "-- FPS",
+                statusArea, juce::Justification::centredLeft);
 
     ui::drawPanel (g, pluginRailBounds.toFloat(), true);
     ui::drawPanel (g, pluginPanelBounds.toFloat(), true);
     ui::drawPanel (g, cameraPanelBounds.toFloat(), true);
     ui::drawPanel (g, footerPanelBounds.toFloat(), false);
 
-    ui::drawSectionTitle (g, "PLUGINS", pluginRailBounds.reduced (12).removeFromTop (24));
+    auto railHeader = pluginRailBounds.reduced (14).removeFromTop (26);
+    ui::drawSectionTitle (g, "PLUGINS", railHeader);
 
-    auto pluginHeader = pluginPanelBounds.reduced (12).removeFromTop (pluginHeaderHeight - 8);
-    auto pluginTitle = pluginHeader;
-    pluginTitle.removeFromRight (170);
-    ui::drawSectionTitle (g, "PLUGIN", pluginTitle.removeFromLeft (76));
-    pluginTitle.removeFromLeft (8);
-    const auto selected = processor.getSelectedSlot();
-    const auto loaded = processor.isSlotLoaded (selected);
-    auto pluginName = processor.getSlotPluginName (selected);
-    if (! loaded) pluginName = "NO DEVICE";
-    g.setColour (loaded ? ui::text : ui::textMuted);
-    g.setFont (ui::font (11.0f, juce::Font::bold));
-    g.drawFittedText ("S0" + juce::String (selected + 1) + "  ·  " + pluginName,
-                      pluginTitle, juce::Justification::centredLeft, 1);
-
-    if (const auto error = processor.getSlotLastError (selected); error.isNotEmpty())
+    if (const auto error = processor.getSlotLastError (processor.getSelectedSlot()); error.isNotEmpty())
     {
-        auto errorArea = pluginPanelBounds.reduced (12).removeFromBottom (20);
+        auto errorArea = pluginPanelBounds.reduced (14).removeFromBottom (18);
         g.setColour (ui::accent);
         g.setFont (ui::metaFont());
         g.drawFittedText (error, errorArea, juce::Justification::centredLeft, 1);
     }
 
-    auto cameraHeader = cameraPanelBounds.reduced (12).removeFromTop (24);
+    auto cameraHeader = cameraPanelBounds.reduced (14).removeFromTop (24);
     ui::drawSectionTitle (g, "CAMERA", cameraHeader);
+    auto dot = juce::Rectangle<float> (static_cast<float> (cameraHeader.getX() + 66),
+                                       static_cast<float> (cameraHeader.getCentreY() - 3), 6.0f, 6.0f);
+    g.setColour (cameraStatusColour (connected, snapshot));
+    g.fillEllipse (dot);
 
     g.setColour (ui::viewport);
     g.fillRoundedRectangle (cameraPreviewBounds.toFloat(), 8.0f);
-    g.setColour (ui::border.withAlpha (0.55f));
+    g.setColour (ui::border);
     g.drawRoundedRectangle (cameraPreviewBounds.toFloat().reduced (0.5f), 8.0f, 1.0f);
 
     juce::Rectangle<int> imageRect;
-    if (connected && cameraFrame.isValid())
+    if (connected && cameraDisplayImage.isValid())
     {
-        const auto iw = cameraFrame.image.getWidth();
-        const auto ih = cameraFrame.image.getHeight();
+        const auto iw = cameraDisplayImage.getWidth();
+        const auto ih = cameraDisplayImage.getHeight();
         const auto scale = juce::jmin (static_cast<float> (cameraPreviewBounds.getWidth()) / static_cast<float> (iw),
                                       static_cast<float> (cameraPreviewBounds.getHeight()) / static_cast<float> (ih));
         const auto dw = juce::jmax (1, juce::roundToInt (iw * scale));
         const auto dh = juce::jmax (1, juce::roundToInt (ih * scale));
         imageRect = juce::Rectangle<int> (dw, dh).withCentre (cameraPreviewBounds.getCentre());
-        g.drawImage (cameraFrame.image, imageRect.getX(), imageRect.getY(), imageRect.getWidth(), imageRect.getHeight(),
+        g.saveState();
+        g.reduceClipRegion (cameraPreviewBounds);
+        g.drawImage (cameraDisplayImage, imageRect.getX(), imageRect.getY(), imageRect.getWidth(), imageRect.getHeight(),
                      0, 0, iw, ih, false);
-        if (cameraFrame.timestampMs == snapshot.timestampMs)
+        drawCameraReticle (g, imageRect.toFloat());
+        if (showCameraLandmarks && cameraFrame.timestampMs == snapshot.timestampMs)
         {
-            drawHandOverlay (g, imageRect.toFloat(), snapshot.left, ui::gray);
+            drawHandOverlay (g, imageRect.toFloat(), snapshot.left, ui::textMuted);
             drawHandOverlay (g, imageRect.toFloat(), snapshot.right, ui::accent);
         }
+        g.restoreState();
     }
     else
     {
@@ -875,35 +1066,28 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
         g.setFont (ui::controlFont());
         g.drawText (connected ? "WAITING FOR CAMERA" : "VISION OFFLINE",
                     cameraPreviewBounds, juce::Justification::centred);
+        drawCameraReticle (g, cameraPreviewBounds.toFloat().reduced (12.0f));
     }
+}
 
-    auto info = cameraInfoBounds;
-    const auto drawInfo = [&] (juce::String key, juce::String value, bool accentValue = false)
-    {
-        auto row = info.removeFromTop (19);
-        g.setColour (ui::textMuted);
-        g.setFont (ui::metaFont());
-        g.drawText (key, row.removeFromLeft (72), juce::Justification::centredLeft);
-        g.setColour (accentValue ? ui::accent : ui::text);
-        g.setFont (ui::font (9.4f, juce::Font::bold));
-        g.drawFittedText (value, row, juce::Justification::centredRight, 1);
-    };
-
-    juce::String handValue;
-    if (! connected) handValue = "OFFLINE";
-    else if (snapshot.handCalibrationActive) handValue = "CALIBRATING";
-    else if (! rolesTrusted) handValue = "CALIBRATE";
-    else handValue = snapshot.swapHandedness ? "SWAPPED" : "READY";
-    drawInfo ("HAND", handValue, ! connected || ! rolesTrusted);
-
-    juce::String liveValue = "--";
-    if (rolesTrusted && snapshot.right.present)
-        liveValue = gr::controlGestureToShortLabel (snapshot.right.stableGesture);
-    drawInfo ("GESTURE", liveValue, false);
-
-    const auto leftSlot = rolesTrusted && snapshot.left.present && snapshot.left.stableSlot > 0
-        ? juce::String (snapshot.left.stableSlot) : juce::String ("--");
-    drawInfo ("SELECT", "SLOT " + leftSlot, false);
+void GestureRackAudioProcessorEditor::drawCameraReticle (juce::Graphics& g, juce::Rectangle<float> imageArea)
+{
+    if (imageArea.isEmpty()) return;
+    auto area = imageArea.reduced (juce::jmin (22.0f, imageArea.getWidth() * 0.08f),
+                                   juce::jmin (18.0f, imageArea.getHeight() * 0.08f));
+    const auto arm = juce::jlimit (10.0f, 20.0f, juce::jmin (area.getWidth(), area.getHeight()) * 0.08f);
+    juce::Path p;
+    p.startNewSubPath (area.getX(), area.getY() + arm); p.lineTo (area.getX(), area.getY()); p.lineTo (area.getX() + arm, area.getY());
+    p.startNewSubPath (area.getRight() - arm, area.getY()); p.lineTo (area.getRight(), area.getY()); p.lineTo (area.getRight(), area.getY() + arm);
+    p.startNewSubPath (area.getX(), area.getBottom() - arm); p.lineTo (area.getX(), area.getBottom()); p.lineTo (area.getX() + arm, area.getBottom());
+    p.startNewSubPath (area.getRight() - arm, area.getBottom()); p.lineTo (area.getRight(), area.getBottom()); p.lineTo (area.getRight(), area.getBottom() - arm);
+    const auto cx = area.getCentreX();
+    const auto cy = area.getCentreY();
+    p.startNewSubPath (cx - 6.0f, cy); p.lineTo (cx + 6.0f, cy);
+    p.startNewSubPath (cx, cy - 6.0f); p.lineTo (cx, cy + 6.0f);
+    g.setColour (ui::accent);
+    g.strokePath (p, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
+                                           juce::PathStrokeType::rounded));
 }
 
 void GestureRackAudioProcessorEditor::drawHandOverlay (juce::Graphics& g, juce::Rectangle<float> imageArea,
@@ -917,87 +1101,127 @@ void GestureRackAudioProcessorEditor::drawHandOverlay (juce::Graphics& g, juce::
         const auto y = juce::jlimit (0.0f, 1.0f, hand.landmarks[i].y);
         points[i] = { imageArea.getX() + x * imageArea.getWidth(), imageArea.getY() + y * imageArea.getHeight() };
     }
-
-    g.setColour (colour.withAlpha (0.92f));
+    g.setColour (colour.withAlpha (0.86f));
     for (const auto [a, b] : handConnections)
-        g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 1.7f);
+        g.drawLine ({ points[static_cast<size_t> (a)], points[static_cast<size_t> (b)] }, 1.4f);
     for (const auto& point : points)
     {
-        g.setColour (ui::canvas.withAlpha (0.60f));
-        g.fillEllipse (point.x - 3.3f, point.y - 3.3f, 6.6f, 6.6f);
+        g.setColour (ui::canvas.withAlpha (0.55f));
+        g.fillEllipse (point.x - 2.8f, point.y - 2.8f, 5.6f, 5.6f);
         g.setColour (colour);
-        g.fillEllipse (point.x - 1.9f, point.y - 1.9f, 3.8f, 3.8f);
+        g.fillEllipse (point.x - 1.5f, point.y - 1.5f, 3.0f, 3.0f);
     }
 }
 
 void GestureRackAudioProcessorEditor::resized()
 {
-    auto root = getLocalBounds().reduced (outerMargin);
-    root.removeFromTop (headerHeight);
-    root.removeFromTop (layoutGap);
+    const auto outer = scaledMetric (uiScale, metrics::outerMargin);
+    const auto gap = scaledMetric (uiScale, metrics::gutter);
+    const auto topHeight = scaledMetric (uiScale, metrics::topBarHeight);
+    const auto footerHeight = scaledMetric (uiScale, metrics::footerHeight);
+    auto root = getLocalBounds().reduced (outer);
+    topBarBounds = root.removeFromTop (topHeight);
+    root.removeFromTop (gap);
     footerPanelBounds = root.removeFromBottom (footerHeight);
-    root.removeFromBottom (layoutGap);
+    root.removeFromBottom (gap);
     auto workspace = root;
 
-    pluginRailBounds = workspace.removeFromLeft (railWidth);
-    workspace.removeFromLeft (layoutGap);
-    auto rightColumn = workspace.removeFromRight (cameraColumnWidth);
-    workspace.removeFromRight (layoutGap);
-    auto center = workspace;
+    const auto railMin = scaledMetric (uiScale, 200);
+    const auto railMax = scaledMetric (uiScale, 260);
+    const auto rightMin = scaledMetric (uiScale, 320);
+    const auto rightMax = scaledMetric (uiScale, 380);
+    const auto railWidth = juce::jlimit (railMin, railMax, juce::roundToInt (getWidth() * 0.138f));
+    const auto rightWidth = juce::jlimit (rightMin, rightMax, juce::roundToInt (getWidth() * 0.203f));
 
-    auto railContent = pluginRailBounds.reduced (12);
-    railContent.removeFromTop (30);
-    constexpr int slotGap = 6;
-    const auto availableForSlots = juce::jmax (1, railContent.getHeight() - slotGap * (GestureRackAudioProcessor::slotCount - 1));
-    const auto slotHeight = juce::jmax (38, availableForSlots / GestureRackAudioProcessor::slotCount);
+    pluginRailBounds = workspace.removeFromLeft (railWidth);
+    workspace.removeFromLeft (gap);
+    auto rightColumn = workspace.removeFromRight (rightWidth);
+    workspace.removeFromRight (gap);
+    auto centerColumn = workspace;
+
+    const auto native = embeddedCanvas != nullptr ? embeddedCanvas->getNativeEditorSize() : juce::Point<int>();
+    auto upperHeight = metrics::upperRowHeightFor (centerColumn.getHeight(), native.y);
+    upperHeight = juce::jlimit (scaledMetric (uiScale, 260),
+                               juce::jmax (scaledMetric (uiScale, 260), centerColumn.getHeight() - gap - scaledMetric (uiScale, 270)),
+                               upperHeight);
+
+    pluginPanelBounds = centerColumn.removeFromTop (upperHeight);
+    centerColumn.removeFromTop (gap);
+    parameterInspector.setBounds (centerColumn);
+
+    cameraPanelBounds = rightColumn.removeFromTop (upperHeight);
+    rightColumn.removeFromTop (gap);
+    if (gesturePanel != nullptr) gesturePanel->setBounds (rightColumn);
+
+    auto railContent = pluginRailBounds.reduced (scaledMetric (uiScale, 14));
+    auto railHeader = railContent.removeFromTop (scaledMetric (uiScale, 28));
+    railSearchButton.setBounds (railHeader.removeFromRight (scaledMetric (uiScale, 30)));
+    railContent.removeFromTop (scaledMetric (uiScale, 8));
+    auto browserArea = railContent.removeFromBottom (scaledMetric (uiScale, 46));
+    railBrowserButton.setBounds (browserArea);
+    railContent.removeFromBottom (scaledMetric (uiScale, 10));
+    const auto slotGap = scaledMetric (uiScale, 7);
+    const auto available = juce::jmax (1, railContent.getHeight() - slotGap * (GestureRackAudioProcessor::slotCount - 1));
+    const auto slotHeight = juce::jmax (38, available / GestureRackAudioProcessor::slotCount);
     for (auto& button : slotButtons)
     {
         button.setBounds (railContent.removeFromTop (slotHeight));
         railContent.removeFromTop (slotGap);
     }
 
-    auto gestureBounds = rightColumn.removeFromBottom (juce::jmin (gesturePanelHeight, rightColumn.getHeight() / 3));
-    rightColumn.removeFromBottom (layoutGap);
-    cameraPanelBounds = rightColumn;
-    if (gesturePanel != nullptr) gesturePanel->setBounds (gestureBounds);
-
-    auto cameraContent = cameraPanelBounds.reduced (12);
-    cameraContent.removeFromTop (30);
-    cameraInfoBounds = cameraContent.removeFromBottom (66);
-    cameraContent.removeFromBottom (8);
-    cameraPreviewBounds = cameraContent;
-
-    const auto native = embeddedCanvas != nullptr ? embeddedCanvas->getNativeEditorSize() : juce::Point<int>();
-    const auto desiredPluginHeight = native.y > 0 ? native.y + pluginHeaderHeight + 24 : 360;
-    const auto maxPluginHeight = juce::jmax (180, center.getHeight() - layoutGap - minimumParameterHeight);
-    const auto pluginHeight = juce::jlimit (180, maxPluginHeight, desiredPluginHeight);
-    pluginPanelBounds = center.removeFromTop (pluginHeight);
-    center.removeFromTop (layoutGap);
-    parameterInspector.setBounds (center);
-
-    auto pluginContent = pluginPanelBounds.reduced (12);
-    auto pluginHeader = pluginContent.removeFromTop (pluginHeaderHeight - 8);
-    removeButton.setBounds (pluginHeader.removeFromRight (72));
-    pluginHeader.removeFromRight (6);
-    bypassButton.setBounds (pluginHeader.removeFromRight (78));
-    pluginContent.removeFromTop (4);
+    auto pluginContent = pluginPanelBounds.reduced (scaledMetric (uiScale, 12));
+    auto pluginChrome = pluginContent.removeFromTop (scaledMetric (uiScale, 36));
+    pluginMoreButton.setBounds (pluginChrome.removeFromRight (scaledMetric (uiScale, 40)));
+    pluginChrome.removeFromRight (scaledMetric (uiScale, 8));
+    removeButton.setBounds (pluginChrome.removeFromRight (scaledMetric (uiScale, 40)));
+    pluginChrome.removeFromRight (scaledMetric (uiScale, 8));
+    bypassButton.setBounds (pluginChrome.removeFromRight (scaledMetric (uiScale, 102)));
+    pluginContent.removeFromTop (scaledMetric (uiScale, 5));
     pluginViewportBounds = pluginContent;
     pluginViewport.setBounds (pluginViewportBounds);
 
-    auto footer = footerPanelBounds.reduced (10, 7);
-    loadButton.setBounds (footer.removeFromLeft (100));
-    footer.removeFromLeft (12);
-    calibrateHandsButton.setBounds (footer.removeFromLeft (108));
-    footer.removeFromLeft (8);
-    swapHandsButton.setBounds (footer.removeFromLeft (104));
+    auto cameraContent = cameraPanelBounds.reduced (scaledMetric (uiScale, 14));
+    cameraContent.removeFromTop (scaledMetric (uiScale, 32));
+    cameraPreviewBounds = cameraContent;
+
+    auto footer = footerPanelBounds.reduced (scaledMetric (uiScale, 12), scaledMetric (uiScale, 9));
+    loadButton.setBounds (footer.removeFromLeft (scaledMetric (uiScale, 150)));
+    footer.removeFromLeft (scaledMetric (uiScale, 12));
+    calibrateHandsButton.setBounds (footer.removeFromLeft (scaledMetric (uiScale, 145)));
+    footer.removeFromLeft (scaledMetric (uiScale, 10));
+    swapHandsButton.setBounds (footer.removeFromLeft (scaledMetric (uiScale, 145)));
+
+    auto topRight = topBarBounds;
+    menuButton.setBounds (topRight.removeFromRight (scaledMetric (uiScale, 34)));
+    topRight.removeFromRight (scaledMetric (uiScale, 8));
+    settingsButton.setBounds (topRight.removeFromRight (scaledMetric (uiScale, 34)));
 
     if (pluginBrowser != nullptr)
     {
-        auto browserBounds = getLocalBounds().reduced (outerMargin);
-        browserBounds.removeFromTop (headerHeight);
+        auto browserBounds = getLocalBounds().reduced (outer);
+        browserBounds.removeFromTop (topHeight + gap);
+        browserBounds.removeFromBottom (footerHeight + gap);
         pluginBrowser->setBounds (browserBounds);
-        pluginBrowser->toFront (false);
+        if (pluginBrowser->isVisible()) pluginBrowser->toFront (false);
     }
-
     updateViewportScrollbars();
+}
+
+bool GestureRackAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    const auto modifiers = key.getModifiers();
+    const auto code = juce::CharacterFunctions::toLowerCase (static_cast<juce_wchar> (key.getKeyCode()));
+    if (modifiers.isCommandDown() && code == static_cast<juce_wchar> ('z'))
+    {
+        if (modifiers.isShiftDown()) return parameterInspector.redoLastMapping();
+        return parameterInspector.undoLastMapping();
+    }
+    if (modifiers.isCommandDown() && code == static_cast<juce_wchar> ('y'))
+        return parameterInspector.redoLastMapping();
+    if (key == juce::KeyPress::escapeKey && processor.isParameterLearnArmed())
+    {
+        processor.cancelParameterLearn();
+        return true;
+    }
+    return false;
 }

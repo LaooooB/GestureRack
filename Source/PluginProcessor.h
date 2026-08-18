@@ -52,8 +52,6 @@ public:
     void removeSlotPlugin (int slotIndex);
     bool moveSlot (int fromSlot, int toSlot);
 
-    // Native child editors are embedded by PluginEditor. Ownership stays with
-    // GestureBypassWrapper so editor lifetime cannot outlive the hosted plugin.
     juce::AudioProcessorEditor* getOrCreateSlotEditor (int slotIndex);
     bool slotHasNativeEditor (int slotIndex) const noexcept;
     uintptr_t getSlotChildIdentity (int slotIndex) const noexcept;
@@ -99,6 +97,35 @@ public:
 
     std::vector<gr::ParameterDescriptor> getSlotParameters (int slotIndex) const;
     std::vector<gr::GestureBinding> getSlotMappings (int slotIndex) const;
+
+    juce::String getParameterTextForUi (int slotIndex, int parameterIndex, float normalizedValue) const
+    {
+        if (! isValidSlotIndex (slotIndex)) return {};
+        auto* child = slots[static_cast<size_t> (slotIndex)]->getChild();
+        if (child == nullptr) return {};
+        const auto& parameters = child->getParameters();
+        if (! juce::isPositiveAndBelow (parameterIndex, parameters.size()) || parameters[parameterIndex] == nullptr)
+            return {};
+        const auto normalized = juce::jlimit (0.0f, 1.0f, normalizedValue);
+        auto result = parameters[parameterIndex]->getText (normalized, 72).trim();
+        if (result.isEmpty()) result = juce::String (normalized, 3);
+        return result;
+    }
+
+    void replaceSlotMappingsForUi (int slotIndex, const std::vector<gr::GestureBinding>& replacement)
+    {
+        if (! isValidSlotIndex (slotIndex)) return;
+        parameterLearnManager.cancelIfSlot (slotIndex);
+        mappingEngine.releaseAllActiveGestures();
+        auto& slot = *slots[static_cast<size_t> (slotIndex)];
+        slot.clearAllMappings();
+        for (auto binding : replacement)
+        {
+            binding.slotIndex = slotIndex;
+            slot.addMapping (binding);
+        }
+        updateMappingStatus ("MAPPING HISTORY RESTORED");
+    }
 
     bool addParameterGestureMapping (int parameterIndex,
                                      gr::ControlGesture gesture,

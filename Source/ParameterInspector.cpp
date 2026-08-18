@@ -7,7 +7,6 @@ namespace gr
 namespace
 {
 namespace ui = gr::ui;
-constexpr int parameterBadgeAreaWidth = 190;
 
 bool mappingTargetsParameter (const GestureBinding& binding, const ParameterDescriptor& descriptor)
 {
@@ -21,34 +20,208 @@ std::vector<int> mappingIndicesForParameter (const std::vector<GestureBinding>& 
                                              const ParameterDescriptor& descriptor)
 {
     std::vector<int> result;
-    result.reserve (7);
+    result.reserve (8);
     for (int i = 0; i < static_cast<int> (mappings.size()); ++i)
         if (mappingTargetsParameter (mappings[static_cast<size_t> (i)], descriptor)) result.push_back (i);
     return result;
 }
 
-std::vector<juce::Rectangle<int>> layoutGestureBadges (juce::Rectangle<int> area, int count)
+ui::Icon iconForParameterKind (ParameterKind kind)
 {
-    std::vector<juce::Rectangle<int>> result;
-    if (count <= 0 || area.isEmpty()) return result;
-    area = area.reduced (1, 4);
-    constexpr int gap = 4;
-    const auto totalGap = gap * (count - 1);
-    const auto chipWidth = juce::jmax (1, (area.getWidth() - totalGap) / count);
-    const auto totalWidth = chipWidth * count + totalGap;
-    auto x = area.getRight() - totalWidth;
-    result.reserve (static_cast<size_t> (count));
-    for (int i = 0; i < count; ++i)
+    switch (kind)
     {
-        result.emplace_back (x, area.getY(), chipWidth, area.getHeight());
-        x += chipWidth + gap;
+        case ParameterKind::toggle:     return ui::Icon::toggle;
+        case ParameterKind::choice:     return ui::Icon::choice;
+        case ParameterKind::stepped:    return ui::Icon::stepped;
+        case ParameterKind::continuous: return ui::Icon::continuous;
+        case ParameterKind::readOnly:   return ui::Icon::bypass;
+    }
+    return ui::Icon::sliders;
+}
+
+juce::String gestureUiLabel (ControlGesture gesture)
+{
+    switch (gesture)
+    {
+        case ControlGesture::openPalm:   return "Palm";
+        case ControlGesture::closedFist: return "Fist";
+        case ControlGesture::victory:    return "Victory";
+        case ControlGesture::thumbUp:    return "Thumb Up";
+        case ControlGesture::thumbDown:  return "Down";
+        case ControlGesture::thumbLeft:  return "Left";
+        case ControlGesture::thumbRight: return "Right";
+        default:                         return "?";
+    }
+}
+
+ui::Icon iconForGesture (ControlGesture gesture)
+{
+    switch (gesture)
+    {
+        case ControlGesture::openPalm:   return ui::Icon::palm;
+        case ControlGesture::closedFist: return ui::Icon::fist;
+        case ControlGesture::victory:    return ui::Icon::victory;
+        case ControlGesture::thumbUp:    return ui::Icon::thumbUp;
+        case ControlGesture::thumbDown:  return ui::Icon::arrowDown;
+        case ControlGesture::thumbLeft:  return ui::Icon::arrowLeft;
+        case ControlGesture::thumbRight: return ui::Icon::arrowRight;
+        default:                         return ui::Icon::palm;
+    }
+}
+
+struct RowColumns
+{
+    juce::Rectangle<int> parameter;
+    juce::Rectangle<int> range;
+    juce::Rectangle<int> gesture;
+};
+
+RowColumns layoutRowColumns (int width, int height)
+{
+    auto inner = juce::Rectangle<int> (0, 0, width, height).reduced (9, 3);
+    const auto parameterWidth = juce::jlimit (190, 300, juce::roundToInt (inner.getWidth() * 0.31f));
+    const auto gestureWidth = juce::jlimit (190, 310, juce::roundToInt (inner.getWidth() * 0.30f));
+    RowColumns result;
+    result.parameter = inner.removeFromLeft (juce::jmin (parameterWidth, inner.getWidth()));
+    inner.removeFromLeft (8);
+    result.gesture = inner.removeFromRight (juce::jmin (gestureWidth, inner.getWidth()));
+    inner.removeFromRight (8);
+    result.range = inner;
+    return result;
+}
+
+struct RangeGeometry
+{
+    juce::Rectangle<int> leftText;
+    juce::Rectangle<int> track;
+    juce::Rectangle<int> rightText;
+};
+
+RangeGeometry layoutRangeGeometry (juce::Rectangle<int> bounds)
+{
+    RangeGeometry result;
+    const auto textWidth = juce::jlimit (46, 74, bounds.getWidth() / 4);
+    result.leftText = bounds.removeFromLeft (textWidth);
+    result.rightText = bounds.removeFromRight (textWidth);
+    bounds.reduce (8, 0);
+    result.track = bounds.withSizeKeepingCentre (bounds.getWidth(), 14);
+    return result;
+}
+
+struct PillGeometry
+{
+    juce::Rectangle<int> rect;
+    juce::Rectangle<int> removeRect;
+    int mappingIndex = -1;
+    int overflow = 0;
+};
+
+std::vector<PillGeometry> layoutPills (juce::Rectangle<int> area, const std::vector<int>& mappingIndices)
+{
+    std::vector<PillGeometry> result;
+    if (mappingIndices.empty() || area.isEmpty()) return result;
+    area.reduce (1, 6);
+    constexpr int gap = 5;
+    constexpr int minimumPill = 72;
+    const auto capacity = juce::jmax (1, (area.getWidth() + gap) / (minimumPill + gap));
+    const auto actualCount = static_cast<int> (mappingIndices.size());
+    const auto visibleCount = juce::jmin (actualCount, capacity);
+    const auto needsOverflow = actualCount > visibleCount;
+    const auto slots = needsOverflow ? juce::jmax (1, visibleCount) : visibleCount;
+    const auto pillWidth = juce::jmax (48, (area.getWidth() - gap * (slots - 1)) / slots);
+
+    for (int i = 0; i < slots; ++i)
+    {
+        PillGeometry pill;
+        pill.rect = area.removeFromLeft (pillWidth);
+        if (i + 1 < slots) area.removeFromLeft (gap);
+        if (needsOverflow && i == slots - 1)
+        {
+            pill.overflow = actualCount - (slots - 1);
+        }
+        else
+        {
+            pill.mappingIndex = mappingIndices[static_cast<size_t> (i)];
+            auto remove = pill.rect;
+            pill.removeRect = remove.removeFromRight (24).reduced (4, 3);
+        }
+        result.push_back (pill);
     }
     return result;
+}
+
+bool bindingStateEqual (const GestureBinding& a, const GestureBinding& b)
+{
+    return a.id == b.id
+        && a.slotIndex == b.slotIndex
+        && a.sourceGesture == b.sourceGesture
+        && a.targetType == b.targetType
+        && a.mode == b.mode
+        && a.pluginIdentifier == b.pluginIdentifier
+        && a.parameterStableId == b.parameterStableId
+        && a.parameterIndexFallback == b.parameterIndexFallback
+        && a.parameterName == b.parameterName
+        && std::abs (a.minValue - b.minValue) < 0.00001f
+        && std::abs (a.maxValue - b.maxValue) < 0.00001f
+        && std::abs (a.smoothingMs - b.smoothingMs) < 0.0001f
+        && std::abs (a.deadband - b.deadband) < 0.00001f
+        && std::abs (a.curve - b.curve) < 0.00001f
+        && a.inverted == b.inverted
+        && a.enabled == b.enabled;
+}
+
+bool mappingSnapshotsDiffer (const std::vector<GestureBinding>& a,
+                             const std::vector<GestureBinding>& b)
+{
+    if (a.size() != b.size()) return true;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (! bindingStateEqual (a[i], b[i])) return true;
+    return false;
 }
 
 int modeToComboId (MappingMode mode) { return static_cast<int> (mode) + 1; }
 MappingMode comboIdToMode (int id) { return static_cast<MappingMode> (juce::jmax (1, id) - 1); }
 }
+
+class ParameterInspector::MappingSnapshotAction final : public juce::UndoableAction
+{
+public:
+    MappingSnapshotAction (GestureRackAudioProcessor& processorToUse,
+                           int slotToUse,
+                           std::vector<GestureBinding> beforeToUse,
+                           std::vector<GestureBinding> afterToUse)
+        : processor (processorToUse), slot (slotToUse),
+          before (std::move (beforeToUse)), after (std::move (afterToUse)) {}
+
+    bool perform() override
+    {
+        if (firstPerform)
+        {
+            firstPerform = false;
+            return true;
+        }
+        processor.replaceSlotMappingsForUi (slot, after);
+        return true;
+    }
+
+    bool undo() override
+    {
+        processor.replaceSlotMappingsForUi (slot, before);
+        return true;
+    }
+
+    int getSizeInUnits() override
+    {
+        return juce::jmax (1, static_cast<int> (before.size() + after.size()));
+    }
+
+private:
+    GestureRackAudioProcessor& processor;
+    int slot = 0;
+    std::vector<GestureBinding> before;
+    std::vector<GestureBinding> after;
+    bool firstPerform = true;
+};
 
 class ParameterInspector::ParameterListModel final : public juce::ListBoxModel
 {
@@ -60,84 +233,123 @@ public:
     {
         if (! juce::isPositiveAndBelow (row, static_cast<int> (owner.parameters.size()))) return;
         const auto& parameter = owner.parameters[static_cast<size_t> (row)];
-        auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 2);
+        const auto columns = layoutRowColumns (width, height);
+        const auto full = juce::Rectangle<int> (0, 0, width, height).reduced (2, 1);
         const auto isDropTarget = row == owner.gestureDropPreviewRow
                                && owner.gestureDropPreview != ControlGesture::unknown;
 
-        if (isDropTarget)
+        if ((row & 1) != 0)
         {
-            g.setColour (ui::accent.withAlpha (parameter.automatable ? 0.10f : 0.04f));
-            g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
-            g.setColour (parameter.automatable ? ui::accent : ui::gray.withAlpha (0.45f));
-            g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 6.0f, 1.0f);
+            g.setColour (ui::surfaceHigh.withAlpha (0.20f));
+            g.fillRect (full);
         }
-        else if (selected)
+        if (selected || isDropTarget)
         {
-            g.setColour (ui::accent.withAlpha (0.07f));
-            g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
-            g.setColour (ui::accent.withAlpha (0.42f));
-            g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 6.0f, 1.0f);
-        }
-        else if ((row & 1) != 0)
-        {
-            g.setColour (ui::surfaceHigh.withAlpha (0.26f));
-            g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
+            g.setColour (ui::accent.withAlpha (isDropTarget ? 0.065f : 0.035f));
+            g.fillRoundedRectangle (full.toFloat().reduced (2.0f), 6.0f);
         }
 
-        auto badgeArea = bounds.removeFromRight (parameterBadgeAreaWidth);
-        auto typeArea = bounds.removeFromRight (66);
-        auto valueArea = bounds.removeFromRight (102);
+        g.setColour (ui::border.withAlpha (0.56f));
+        g.drawHorizontalLine (height - 1, 8.0f, static_cast<float> (width - 8));
 
-        g.setColour (parameter.automatable ? ui::text : ui::textMuted.withAlpha (0.62f));
-        g.setFont (ui::font (11.0f, juce::Font::bold));
-        g.drawFittedText (parameter.name, bounds, juce::Justification::centredLeft, 1);
+        auto parameterArea = columns.parameter;
+        auto iconArea = parameterArea.removeFromLeft (26).withSizeKeepingCentre (18, 18);
+        ui::drawIcon (g, iconForParameterKind (parameter.kind), iconArea.toFloat(),
+                      parameter.automatable ? ui::accent : ui::textMuted.withAlpha (0.52f), 1.45f);
+        parameterArea.removeFromLeft (4);
+        g.setColour (parameter.automatable ? ui::text : ui::textMuted.withAlpha (0.58f));
+        g.setFont (ui::rowFont());
+        g.drawFittedText (parameter.name, parameterArea, juce::Justification::centredLeft, 1);
 
-        g.setColour (ui::textMuted);
-        g.setFont (ui::font (10.0f));
-        g.drawFittedText (parameter.displayValue.isNotEmpty() ? parameter.displayValue
-                                                               : juce::String (parameter.normalizedValue, 3),
-                          valueArea, juce::Justification::centredRight, 1);
-        g.setFont (ui::font (8.4f, juce::Font::bold));
-        g.drawText (parameterKindToString (parameter.kind), typeArea, juce::Justification::centredRight);
+        const auto rangeMapping = owner.rangeMappingIndexForParameter (parameter);
+        float minValue = 0.0f;
+        float maxValue = 1.0f;
+        bool rangeEnabled = false;
+        if (juce::isPositiveAndBelow (rangeMapping, static_cast<int> (owner.mappings.size())))
+        {
+            const auto& binding = owner.mappings[static_cast<size_t> (rangeMapping)];
+            minValue = binding.minValue;
+            maxValue = binding.maxValue;
+            rangeEnabled = binding.targetType == MappingTargetType::childParameter;
+        }
+
+        auto range = layoutRangeGeometry (columns.range);
+        auto leftText = owner.processor.getParameterTextForUi (owner.processor.getSelectedSlot(), parameter.index, minValue);
+        auto rightText = owner.processor.getParameterTextForUi (owner.processor.getSelectedSlot(), parameter.index, maxValue);
+        g.setColour (rangeEnabled ? ui::textMuted : ui::textMuted.withAlpha (0.50f));
+        g.setFont (ui::metaFont());
+        g.drawFittedText (leftText, range.leftText, juce::Justification::centredRight, 1);
+        g.drawFittedText (rightText, range.rightText, juce::Justification::centredLeft, 1);
+
+        const auto trackY = static_cast<float> (range.track.getCentreY());
+        const auto trackLeft = static_cast<float> (range.track.getX());
+        const auto trackRight = static_cast<float> (range.track.getRight());
+        const auto minX = juce::jmap (minValue, 0.0f, 1.0f, trackLeft, trackRight);
+        const auto maxX = juce::jmap (maxValue, 0.0f, 1.0f, trackLeft, trackRight);
+        g.setColour (ui::border);
+        g.drawLine (trackLeft, trackY, trackRight, trackY, 1.2f);
+        if (rangeEnabled)
+        {
+            g.setColour (ui::accent.withAlpha (0.70f));
+            g.drawLine (minX, trackY, maxX, trackY, 1.5f);
+            g.setColour (ui::accent);
+            g.fillEllipse (minX - 4.0f, trackY - 4.0f, 8.0f, 8.0f);
+            g.fillEllipse (maxX - 4.0f, trackY - 4.0f, 8.0f, 8.0f);
+        }
+        else
+        {
+            g.setColour (ui::gray.withAlpha (0.42f));
+            g.fillEllipse (trackLeft - 3.0f, trackY - 3.0f, 6.0f, 6.0f);
+            g.fillEllipse (trackRight - 3.0f, trackY - 3.0f, 6.0f, 6.0f);
+        }
 
         const auto mappingIndices = mappingIndicesForParameter (owner.mappings, parameter);
-        if (isDropTarget)
+        const auto pills = layoutPills (columns.gesture, mappingIndices);
+        for (const auto& pill : pills)
         {
-            g.setColour (parameter.automatable ? ui::accent : ui::textMuted);
-            g.setFont (ui::font (9.2f, juce::Font::bold));
-            g.drawFittedText (parameter.automatable
-                                ? controlGestureToShortLabel (owner.gestureDropPreview) + "  ADD"
-                                : juce::String ("LOCKED"),
-                              badgeArea, juce::Justification::centredRight, 1);
-        }
-        else if (! mappingIndices.empty())
-        {
-            const auto badgeRects = layoutGestureBadges (badgeArea, static_cast<int> (mappingIndices.size()));
-            for (int i = 0; i < static_cast<int> (mappingIndices.size()) && i < static_cast<int> (badgeRects.size()); ++i)
+            auto drawRect = pill.rect.toFloat().reduced (0.5f);
+            if (pill.overflow > 0)
             {
-                const auto mappingIndex = mappingIndices[static_cast<size_t> (i)];
-                if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (owner.mappings.size()))) continue;
-                const auto& binding = owner.mappings[static_cast<size_t> (mappingIndex)];
-                const auto rect = badgeRects[static_cast<size_t> (i)];
-                const auto hovered = binding.id.toString() == owner.hoveredMappingId;
-                const auto hoverAmount = hovered ? owner.badgeHoverAmount : 0.0f;
-                auto fill = ui::blend (ui::control, ui::canvas, hoverAmount * 0.38f);
-                if (! binding.enabled) fill = ui::blend (fill, ui::surface, 0.35f);
-                g.setColour (fill);
-                g.fillRoundedRectangle (rect.toFloat(), 5.0f);
-                g.setColour (ui::blend (ui::border, ui::accent, hoverAmount));
-                g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), 5.0f, 1.0f);
-                g.setColour (binding.enabled ? (hovered ? ui::accent : ui::text) : ui::textMuted);
-                g.setFont (ui::font (8.6f, juce::Font::bold));
-                g.drawFittedText (controlGestureToShortLabel (binding.sourceGesture), rect.reduced (2, 0),
-                                  juce::Justification::centred, 1);
+                g.setColour (ui::surfaceHigh);
+                g.fillRoundedRectangle (drawRect, 6.0f);
+                g.setColour (ui::border);
+                g.drawRoundedRectangle (drawRect, 6.0f, 1.0f);
+                g.setColour (ui::textMuted);
+                g.setFont (ui::controlFont());
+                g.drawText ("+" + juce::String (pill.overflow), pill.rect, juce::Justification::centred);
+                continue;
             }
+            if (! juce::isPositiveAndBelow (pill.mappingIndex, static_cast<int> (owner.mappings.size()))) continue;
+            const auto& binding = owner.mappings[static_cast<size_t> (pill.mappingIndex)];
+            const auto selectedMapping = pill.mappingIndex == owner.selectedMappingRow;
+            const auto hovered = binding.id.toString() == owner.hoveredMappingId;
+            g.setColour (selectedMapping ? ui::accent.withAlpha (0.055f) : ui::control);
+            g.fillRoundedRectangle (drawRect, 6.0f);
+            g.setColour (selectedMapping || hovered ? ui::accent : ui::accent.withAlpha (0.66f));
+            g.drawRoundedRectangle (drawRect, 6.0f, 1.0f);
+            auto label = pill.rect;
+            auto remove = label.removeFromRight (24);
+            auto gestureIcon = label.removeFromLeft (22).withSizeKeepingCentre (14, 14);
+            ui::drawIcon (g, iconForGesture (binding.sourceGesture), gestureIcon.toFloat(),
+                          binding.enabled ? ui::accent : ui::textMuted, 1.3f);
+            g.setColour (binding.enabled ? ui::text : ui::textMuted);
+            g.setFont (ui::controlFont());
+            g.drawFittedText (gestureUiLabel (binding.sourceGesture), label.reduced (2, 0),
+                              juce::Justification::centredLeft, 1);
+            ui::drawIcon (g, ui::Icon::cross, remove.withSizeKeepingCentre (10, 10).toFloat(),
+                          hovered ? ui::accent : ui::textMuted, 1.35f);
         }
-        else if (parameter.automatable)
+
+        if (mappingIndices.empty() && isDropTarget)
         {
-            g.setColour (ui::textMuted.withAlpha (0.55f));
-            g.setFont (ui::font (8.8f, juce::Font::bold));
-            g.drawText ("DROP", badgeArea, juce::Justification::centredRight);
+            auto target = columns.gesture.reduced (2, 6).toFloat();
+            g.setColour (ui::accent.withAlpha (0.055f));
+            g.fillRoundedRectangle (target, 6.0f);
+            ui::drawDashedRoundedRect (g, target.reduced (0.5f), 6.0f, ui::accent, 1.0f);
+            g.setColour (ui::accent);
+            g.setFont (ui::controlFont());
+            g.drawText (gestureUiLabel (owner.gestureDropPreview) + "  +  ADD",
+                        target.toNearestInt(), juce::Justification::centred);
         }
     }
 
@@ -161,62 +373,117 @@ private:
     public:
         explicit RowOverlay (ParameterListModel& modelToUse) : model (modelToUse) { setOpaque (false); }
         void setRow (int newRow) noexcept { row = newRow; }
-        bool hitTest (int x, int y) override { return model.findMappingAt (row, { x, y }, getWidth(), getHeight()) >= 0; }
+
+        bool hitTest (int x, int y) override
+        {
+            if (! juce::isPositiveAndBelow (row, static_cast<int> (model.owner.parameters.size()))) return false;
+            const auto point = juce::Point<int> (x, y);
+            if (findPillAt (point).mappingIndex >= 0) return true;
+            const auto& descriptor = model.owner.parameters[static_cast<size_t> (row)];
+            const auto mappingIndex = model.owner.rangeMappingIndexForParameter (descriptor);
+            if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (model.owner.mappings.size()))) return false;
+            return layoutRangeGeometry (layoutRowColumns (getWidth(), getHeight()).range).track.expanded (8, 8).contains (point);
+        }
 
         void mouseMove (const juce::MouseEvent& e) override
         {
-            const auto mappingIndex = model.findMappingAt (row, e.getPosition(), getWidth(), getHeight());
-            if (juce::isPositiveAndBelow (mappingIndex, static_cast<int> (model.owner.mappings.size())))
-                model.owner.setHoveredMapping (model.owner.mappings[static_cast<size_t> (mappingIndex)].id.toString());
+            const auto pill = findPillAt (e.getPosition());
+            if (juce::isPositiveAndBelow (pill.mappingIndex, static_cast<int> (model.owner.mappings.size())))
+                model.owner.setHoveredMapping (model.owner.mappings[static_cast<size_t> (pill.mappingIndex)].id.toString());
+            else
+                model.owner.setHoveredMapping ({});
         }
+
         void mouseExit (const juce::MouseEvent&) override { model.owner.setHoveredMapping ({}); }
-        void mouseDown (const juce::MouseEvent& e) override { model.handleBadgeMouseDown (row, e, getWidth(), getHeight()); }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! juce::isPositiveAndBelow (row, static_cast<int> (model.owner.parameters.size()))) return;
+            const auto pill = findPillAt (e.getPosition());
+            if (juce::isPositiveAndBelow (pill.mappingIndex, static_cast<int> (model.owner.mappings.size())))
+            {
+                if (e.mods.isRightButtonDown() || e.mods.isPopupMenu() || pill.removeRect.contains (e.getPosition()))
+                {
+                    model.owner.removeMappingAt (pill.mappingIndex, "MAPPING REMOVED");
+                    return;
+                }
+                model.owner.selectedParameterRow = row;
+                model.owner.parameterList.selectRow (row, false, true);
+                model.owner.selectedMappingRow = pill.mappingIndex;
+                if (model.owner.advancedExpanded) model.owner.mappingList.selectRow (pill.mappingIndex, false, true);
+                model.owner.loadSelectedMappingControls();
+                model.owner.repaint();
+                return;
+            }
+
+            const auto& descriptor = model.owner.parameters[static_cast<size_t> (row)];
+            const auto mappingIndex = model.owner.rangeMappingIndexForParameter (descriptor);
+            if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (model.owner.mappings.size()))) return;
+            const auto range = layoutRangeGeometry (layoutRowColumns (getWidth(), getHeight()).range);
+            if (! range.track.expanded (8, 8).contains (e.getPosition())) return;
+
+            model.owner.selectedParameterRow = row;
+            model.owner.parameterList.selectRow (row, false, true);
+            model.owner.selectedMappingRow = mappingIndex;
+            if (model.owner.advancedExpanded) model.owner.mappingList.selectRow (mappingIndex, false, true);
+            model.owner.loadSelectedMappingControls();
+
+            const auto& binding = model.owner.mappings[static_cast<size_t> (mappingIndex)];
+            rangeBindingId = binding.id;
+            rangeBefore = model.owner.processor.getSlotMappings (model.owner.processor.getSelectedSlot());
+            const auto trackLeft = static_cast<float> (range.track.getX());
+            const auto trackRight = static_cast<float> (range.track.getRight());
+            const auto minX = juce::jmap (binding.minValue, 0.0f, 1.0f, trackLeft, trackRight);
+            const auto maxX = juce::jmap (binding.maxValue, 0.0f, 1.0f, trackLeft, trackRight);
+            dragMinimum = std::abs (static_cast<float> (e.x) - minX) <= std::abs (static_cast<float> (e.x) - maxX);
+            rangeDragging = true;
+            dragRangeTo (e.x);
+        }
+
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (rangeDragging) dragRangeTo (e.x);
+        }
+
+        void mouseUp (const juce::MouseEvent&) override
+        {
+            if (! rangeDragging) return;
+            rangeDragging = false;
+            const auto slot = model.owner.processor.getSelectedSlot();
+            const auto after = model.owner.processor.getSlotMappings (slot);
+            model.owner.pushMappingSnapshot (slot, std::move (rangeBefore), after, "Adjust mapping range");
+            rangeBefore.clear();
+            rangeBindingId = {};
+        }
 
     private:
-        ParameterListModel& model;
-        int row = -1;
-    };
-
-    int findMappingAt (int row, juce::Point<int> point, int width, int height) const
-    {
-        if (! juce::isPositiveAndBelow (row, static_cast<int> (owner.parameters.size()))) return -1;
-        const auto mappingIndices = mappingIndicesForParameter (owner.mappings, owner.parameters[static_cast<size_t> (row)]);
-        if (mappingIndices.empty()) return -1;
-        auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 2);
-        const auto badgeArea = bounds.removeFromRight (parameterBadgeAreaWidth);
-        const auto badgeRects = layoutGestureBadges (badgeArea, static_cast<int> (mappingIndices.size()));
-        for (int i = 0; i < static_cast<int> (badgeRects.size()); ++i)
-            if (badgeRects[static_cast<size_t> (i)].contains (point)) return mappingIndices[static_cast<size_t> (i)];
-        return -1;
-    }
-
-    void handleBadgeMouseDown (int row, const juce::MouseEvent& e, int width, int height)
-    {
-        const auto mappingIndex = findMappingAt (row, e.getPosition(), width, height);
-        if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (owner.mappings.size()))) return;
-
-        owner.selectedParameterRow = row;
-        owner.parameterList.selectRow (row, false, true);
-        const auto binding = owner.mappings[static_cast<size_t> (mappingIndex)];
-        if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
+        PillGeometry findPillAt (juce::Point<int> point) const
         {
-            const auto parameterName = juce::isPositiveAndBelow (row, static_cast<int> (owner.parameters.size()))
-                                     ? owner.parameters[static_cast<size_t> (row)].name : binding.parameterName;
-            const auto gestureName = controlGestureToShortLabel (binding.sourceGesture);
-            if (owner.processor.removeGestureMapping (binding.id))
-            {
-                owner.selectedMappingRow = -1;
-                owner.setHoveredMapping ({});
-                owner.refreshData (true);
-                owner.statusLabel.setText (gestureName + " REMOVED · " + parameterName, juce::dontSendNotification);
-            }
-            return;
+            if (! juce::isPositiveAndBelow (row, static_cast<int> (model.owner.parameters.size()))) return {};
+            const auto& descriptor = model.owner.parameters[static_cast<size_t> (row)];
+            const auto indices = mappingIndicesForParameter (model.owner.mappings, descriptor);
+            for (const auto& pill : layoutPills (layoutRowColumns (getWidth(), getHeight()).gesture, indices))
+                if (pill.mappingIndex >= 0 && pill.rect.contains (point)) return pill;
+            return {};
         }
 
-        owner.selectedMappingRow = mappingIndex;
-        if (owner.advancedExpanded) owner.mappingList.selectRow (mappingIndex, false, true);
-        owner.loadSelectedMappingControls();
-    }
+        void dragRangeTo (int x)
+        {
+            const auto range = layoutRangeGeometry (layoutRowColumns (getWidth(), getHeight()).range);
+            const auto normalized = juce::jlimit (0.0f, 1.0f,
+                juce::jmap (static_cast<float> (x),
+                            static_cast<float> (range.track.getX()),
+                            static_cast<float> (range.track.getRight()), 0.0f, 1.0f));
+            model.owner.updateRangeBindingLive (rangeBindingId, normalized, dragMinimum);
+        }
+
+        ParameterListModel& model;
+        int row = -1;
+        bool rangeDragging = false;
+        bool dragMinimum = true;
+        juce::Uuid rangeBindingId;
+        std::vector<GestureBinding> rangeBefore;
+    };
 
     ParameterInspector& owner;
 };
@@ -234,14 +501,14 @@ public:
         const auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (7, 2);
         if (selected)
         {
-            g.setColour (ui::accent.withAlpha (0.07f));
+            g.setColour (ui::accent.withAlpha (0.05f));
             g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
-            g.setColour (ui::accent.withAlpha (0.42f));
+            g.setColour (ui::accent.withAlpha (0.55f));
             g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 6.0f, 1.0f);
         }
         const auto missing = binding.targetType == MappingTargetType::childParameter && ! owner.isParameterMappingResolved (binding);
         g.setColour (missing ? ui::accent : (binding.enabled ? ui::text : ui::textMuted));
-        g.setFont (ui::font (9.9f, juce::Font::bold));
+        g.setFont (ui::controlFont());
         g.drawFittedText (owner.describeBinding (binding) + (missing ? "  [?]" : ""),
                           bounds, juce::Justification::centredLeft, 1);
     }
@@ -259,32 +526,24 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
       parameterList ("Parameters", parameterModel.get()),
       mappingList ("Assigned", mappingModel.get())
 {
+    setWantsKeyboardFocus (true);
+
     for (auto* list : { &parameterList, &mappingList })
     {
         addAndMakeVisible (*list);
         list->setColour (juce::ListBox::backgroundColourId, ui::workspace);
-        list->setColour (juce::ListBox::outlineColourId, ui::border.withAlpha (0.60f));
+        list->setColour (juce::ListBox::outlineColourId, ui::border);
         list->setOutlineThickness (1);
-        list->getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.55f));
+        list->getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.45f));
         list->getVerticalScrollBar().setColour (juce::ScrollBar::backgroundColourId, ui::workspace);
     }
-    parameterList.setRowHeight (32);
-    mappingList.setRowHeight (29);
+    parameterList.setRowHeight (48);
+    mappingList.setRowHeight (32);
 
-    addAndMakeVisible (helpLabel);
-    helpLabel.setText ("DRAG GESTURE TO PARAMETER  ·  RIGHT-CLICK BADGE TO REMOVE", juce::dontSendNotification);
-    helpLabel.setColour (juce::Label::textColourId, ui::textMuted.withAlpha (0.72f));
-    helpLabel.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-    helpLabel.setFont (ui::metaFont());
-    helpLabel.setJustificationType (juce::Justification::centredLeft);
-
-    addAndMakeVisible (statusLabel);
-    statusLabel.setColour (juce::Label::textColourId, ui::textMuted);
-    statusLabel.setFont (ui::metaFont());
-    statusLabel.setJustificationType (juce::Justification::centredLeft);
-
-    addAndMakeVisible (advancedButton);
-    advancedButton.onClick = [this]
+    addAndMakeVisible (undoButton);
+    addAndMakeVisible (moreButton);
+    undoButton.onClick = [this] { undoLastMapping(); };
+    moreButton.onClick = [this]
     {
         advancedExpanded = ! advancedExpanded;
         updateAdvancedVisibility();
@@ -300,44 +559,45 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     behaviorBox.addItem ("STEP +", modeToComboId (MappingMode::stepUpParameter));
     behaviorBox.addItem ("STEP -", modeToComboId (MappingMode::stepDownParameter));
     behaviorBox.addItem ("TRIGGER", modeToComboId (MappingMode::triggerParameter));
-    behaviorBox.setColour (juce::ComboBox::backgroundColourId, ui::workspace);
+    behaviorBox.setColour (juce::ComboBox::backgroundColourId, ui::control);
     behaviorBox.setColour (juce::ComboBox::textColourId, ui::text);
     behaviorBox.setColour (juce::ComboBox::outlineColourId, ui::border);
-    behaviorBox.setColour (juce::ComboBox::arrowColourId, ui::accent.withAlpha (0.76f));
+    behaviorBox.setColour (juce::ComboBox::arrowColourId, ui::textMuted);
 
-    auto setupSlider = [] (juce::Slider& slider, double min, double max, double step, double initial)
+    auto configureSlider = [] (juce::Slider& slider, double min, double max, double step)
     {
         slider.setSliderStyle (juce::Slider::LinearHorizontal);
-        slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 20);
+        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 18);
         slider.setRange (min, max, step);
-        slider.setValue (initial, juce::dontSendNotification);
-        slider.setColour (juce::Slider::textBoxTextColourId, ui::text);
-        slider.setColour (juce::Slider::textBoxBackgroundColourId, ui::workspace);
-        slider.setColour (juce::Slider::textBoxOutlineColourId, ui::border);
-        slider.setColour (juce::Slider::thumbColourId, ui::accent);
-        slider.setColour (juce::Slider::trackColourId, ui::accent.withAlpha (0.40f));
         slider.setColour (juce::Slider::backgroundColourId, ui::control);
+        slider.setColour (juce::Slider::trackColourId, ui::accent.withAlpha (0.62f));
+        slider.setColour (juce::Slider::thumbColourId, ui::accent);
+        slider.setColour (juce::Slider::textBoxTextColourId, ui::text);
+        slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     };
+    configureSlider (minSlider, 0.0, 1.0, 0.001);
+    configureSlider (maxSlider, 0.0, 1.0, 0.001);
+    configureSlider (curveSlider, -1.0, 1.0, 0.01);
+    configureSlider (smoothingSlider, 0.0, 5000.0, 1.0);
+    configureSlider (deadbandSlider, 0.0, 0.25, 0.001);
+    smoothingSlider.setTextValueSuffix (" ms");
 
     for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &smoothingSlider, &deadbandSlider })
         addAndMakeVisible (*slider);
-    setupSlider (minSlider, 0.0, 1.0, 0.001, 0.0);
-    setupSlider (maxSlider, 0.0, 1.0, 0.001, 1.0);
-    setupSlider (curveSlider, -1.0, 1.0, 0.01, 0.0);
-    setupSlider (smoothingSlider, 0.0, 1000.0, 1.0, 25.0);
-    setupSlider (deadbandSlider, 0.0, 0.05, 0.001, 0.008);
-    smoothingSlider.setTextValueSuffix (" ms");
-
     for (auto* toggle : { &invertButton, &mappingEnabledButton })
     {
         addAndMakeVisible (*toggle);
         toggle->setColour (juce::ToggleButton::textColourId, ui::text);
         toggle->setColour (juce::ToggleButton::tickColourId, ui::accent);
-        toggle->setColour (juce::ToggleButton::tickDisabledColourId, ui::textMuted.withAlpha (0.35f));
+        toggle->setColour (juce::ToggleButton::tickDisabledColourId, ui::textMuted);
     }
-    mappingEnabledButton.setToggleState (true, juce::dontSendNotification);
+    for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton })
+        addAndMakeVisible (*button);
 
-    for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton }) addAndMakeVisible (*button);
+    addAndMakeVisible (statusLabel);
+    statusLabel.setColour (juce::Label::textColourId, ui::textMuted);
+    statusLabel.setFont (ui::metaFont());
+    statusLabel.setJustificationType (juce::Justification::centredLeft);
 
     auto autoApply = [this]
     {
@@ -354,11 +614,8 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
 
     removeMappingButton.onClick = [this]
     {
-        if (! juce::isPositiveAndBelow (selectedMappingRow, static_cast<int> (mappings.size()))) return;
-        processor.removeGestureMapping (mappings[static_cast<size_t> (selectedMappingRow)].id);
-        selectedMappingRow = -1;
-        setHoveredMapping ({});
-        refreshData (true);
+        if (juce::isPositiveAndBelow (selectedMappingRow, static_cast<int> (mappings.size())))
+            removeMappingAt (selectedMappingRow, "MAPPING REMOVED");
     };
     livePresetButton.onClick = [this] { smoothingSlider.setValue (25.0, juce::sendNotificationSync); };
     smoothPresetButton.onClick = [this] { smoothingSlider.setValue (80.0, juce::sendNotificationSync); };
@@ -384,31 +641,64 @@ void ParameterInspector::setHoveredMapping (juce::String mappingId)
 
 void ParameterInspector::setGestureDragPreview (ControlGesture gesture, juce::Point<int> localPoint)
 {
-    auto row = -1;
-    if (gesture != ControlGesture::unknown && parameterList.getBounds().contains (localPoint))
+    auto nextRow = -1;
+    auto nextLearn = ControlGesture::unknown;
+    if (gesture != ControlGesture::unknown)
     {
-        const auto point = parameterList.getLocalPoint (this, localPoint);
-        row = parameterList.getRowContainingPosition (point.x, point.y);
-        if (! juce::isPositiveAndBelow (row, static_cast<int> (parameters.size()))) row = -1;
+        if (learnDropBounds.contains (localPoint))
+            nextLearn = gesture;
+        else if (parameterList.getBounds().contains (localPoint))
+        {
+            const auto point = parameterList.getLocalPoint (this, localPoint);
+            nextRow = parameterList.getRowContainingPosition (point.x, point.y);
+            if (! juce::isPositiveAndBelow (nextRow, static_cast<int> (parameters.size()))) nextRow = -1;
+        }
     }
-    if (row == gestureDropPreviewRow && gesture == gestureDropPreview) return;
-    gestureDropPreviewRow = row;
-    gestureDropPreview = row >= 0 ? gesture : ControlGesture::unknown;
+    if (nextRow == gestureDropPreviewRow && nextLearn == learnDropPreview
+        && (nextRow < 0 || gesture == gestureDropPreview)) return;
+    gestureDropPreviewRow = nextRow;
+    gestureDropPreview = nextRow >= 0 ? gesture : ControlGesture::unknown;
+    learnDropPreview = nextLearn;
     parameterList.repaint();
+    repaint();
 }
 
 void ParameterInspector::clearGestureDragPreview()
 {
-    if (gestureDropPreviewRow < 0 && gestureDropPreview == ControlGesture::unknown) return;
+    if (gestureDropPreviewRow < 0 && gestureDropPreview == ControlGesture::unknown
+        && learnDropPreview == ControlGesture::unknown) return;
     gestureDropPreviewRow = -1;
     gestureDropPreview = ControlGesture::unknown;
+    learnDropPreview = ControlGesture::unknown;
     parameterList.repaint();
+    repaint();
 }
 
 bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint)
 {
     clearGestureDragPreview();
-    if (gesture == ControlGesture::unknown || ! parameterList.getBounds().contains (localPoint)) return false;
+    if (gesture == ControlGesture::unknown) return false;
+
+    if (learnDropBounds.contains (localPoint))
+    {
+        if (processor.isParameterLearnArmed()) processor.cancelParameterLearn();
+        juce::String error;
+        const auto slot = processor.getSelectedSlot();
+        auto before = processor.getSlotMappings (slot);
+        if (! processor.beginParameterLearn (gesture, error))
+        {
+            statusLabel.setText (error.isNotEmpty() ? error : "LEARN FAILED", juce::dontSendNotification);
+            return false;
+        }
+        learnUndoTracking = true;
+        learnWasArmed = true;
+        learnUndoSlot = slot;
+        learnUndoBefore = std::move (before);
+        repaint();
+        return true;
+    }
+
+    if (! parameterList.getBounds().contains (localPoint)) return false;
     const auto point = parameterList.getLocalPoint (this, localPoint);
     const auto row = parameterList.getRowContainingPosition (point.x, point.y);
     if (! juce::isPositiveAndBelow (row, static_cast<int> (parameters.size()))) return false;
@@ -419,6 +709,8 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
         return false;
     }
 
+    const auto slot = processor.getSelectedSlot();
+    const auto before = processor.getSlotMappings (slot);
     juce::String error;
     if (! processor.addParameterGestureMapping (parameter.index, gesture, error))
     {
@@ -426,10 +718,12 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
         return false;
     }
 
+    const auto after = processor.getSlotMappings (slot);
+    pushMappingSnapshot (slot, before, after, "Assign gesture");
     selectedParameterRow = row;
     refreshData (true);
     parameterList.selectRow (row, false, true);
-    for (int i = 0; i < static_cast<int> (mappings.size()); ++i)
+    for (int i = static_cast<int> (mappings.size()) - 1; i >= 0; --i)
         if (mappings[static_cast<size_t> (i)].sourceGesture == gesture
             && mappingTargetsParameter (mappings[static_cast<size_t> (i)], parameter))
         {
@@ -438,9 +732,106 @@ bool ParameterInspector::dropGestureAt (ControlGesture gesture, juce::Point<int>
             break;
         }
     loadSelectedMappingControls();
-    statusLabel.setText (controlGestureToShortLabel (gesture) + " → " + parameter.name, juce::dontSendNotification);
+    statusLabel.setText (gestureUiLabel (gesture) + "  ->  " + parameter.name, juce::dontSendNotification);
     repaint();
     return true;
+}
+
+bool ParameterInspector::assignSlotActionGesture (ControlGesture gesture, MappingMode mode)
+{
+    if (gesture == ControlGesture::unknown) return false;
+    const auto slot = processor.getSelectedSlot();
+    const auto before = processor.getSlotMappings (slot);
+    juce::String error;
+    if (! processor.addSlotActionGestureMapping (gesture, mode, error))
+    {
+        statusLabel.setText (error.isNotEmpty() ? error : "ASSIGN FAILED", juce::dontSendNotification);
+        return false;
+    }
+    const auto after = processor.getSlotMappings (slot);
+    pushMappingSnapshot (slot, before, after,
+                         mode == MappingMode::triggerSetActive ? "Assign ACTIVE gesture" : "Assign BYPASS gesture");
+    refreshData (true);
+    return true;
+}
+
+void ParameterInspector::removeMappingAt (int mappingIndex, const juce::String& reason)
+{
+    if (! juce::isPositiveAndBelow (mappingIndex, static_cast<int> (mappings.size()))) return;
+    const auto slot = processor.getSelectedSlot();
+    const auto before = processor.getSlotMappings (slot);
+    const auto id = mappings[static_cast<size_t> (mappingIndex)].id;
+    if (! processor.removeGestureMapping (id)) return;
+    const auto after = processor.getSlotMappings (slot);
+    pushMappingSnapshot (slot, before, after, reason);
+    selectedMappingRow = -1;
+    setHoveredMapping ({});
+    refreshData (true);
+}
+
+int ParameterInspector::rangeMappingIndexForParameter (const ParameterDescriptor& descriptor) const
+{
+    if (juce::isPositiveAndBelow (selectedMappingRow, static_cast<int> (mappings.size()))
+        && mappingTargetsParameter (mappings[static_cast<size_t> (selectedMappingRow)], descriptor))
+        return selectedMappingRow;
+    for (int i = 0; i < static_cast<int> (mappings.size()); ++i)
+        if (mappingTargetsParameter (mappings[static_cast<size_t> (i)], descriptor)) return i;
+    return -1;
+}
+
+void ParameterInspector::updateRangeBindingLive (const juce::Uuid& id, float value, bool minimumHandle)
+{
+    for (int i = 0; i < static_cast<int> (mappings.size()); ++i)
+    {
+        auto binding = mappings[static_cast<size_t> (i)];
+        if (binding.id != id || binding.targetType != MappingTargetType::childParameter) continue;
+        if (minimumHandle)
+            binding.minValue = juce::jlimit (0.0f, binding.maxValue, value);
+        else
+            binding.maxValue = juce::jlimit (binding.minValue, 1.0f, value);
+        juce::String error;
+        if (processor.updateGestureMapping (binding, error))
+        {
+            mappings[static_cast<size_t> (i)] = binding;
+            selectedMappingRow = i;
+            parameterList.repaint();
+            if (advancedExpanded) loadSelectedMappingControls();
+        }
+        else if (error.isNotEmpty())
+            statusLabel.setText (error, juce::dontSendNotification);
+        return;
+    }
+}
+
+void ParameterInspector::pushMappingSnapshot (int slotIndex,
+                                              std::vector<GestureBinding> before,
+                                              std::vector<GestureBinding> after,
+                                              const juce::String& transactionName)
+{
+    if (! mappingSnapshotsDiffer (before, after)) return;
+    undoManager.beginNewTransaction (transactionName);
+    undoManager.perform (new MappingSnapshotAction (processor, slotIndex, std::move (before), std::move (after)));
+    undoButton.setEnabled (undoManager.canUndo());
+}
+
+bool ParameterInspector::undoLastMapping()
+{
+    if (! undoManager.canUndo()) return false;
+    const auto ok = undoManager.undo();
+    refreshData (true);
+    undoButton.setEnabled (undoManager.canUndo());
+    repaint();
+    return ok;
+}
+
+bool ParameterInspector::redoLastMapping()
+{
+    if (! undoManager.canRedo()) return false;
+    const auto ok = undoManager.redo();
+    refreshData (true);
+    undoButton.setEnabled (undoManager.canUndo());
+    repaint();
+    return ok;
 }
 
 void ParameterInspector::timerCallback()
@@ -449,10 +840,18 @@ void ParameterInspector::timerCallback()
     const auto pluginName = processor.getSlotPluginName (slot);
     refreshData (slot != lastSlot || pluginName != lastPluginName);
 
-    const auto target = hoveredMappingId.isNotEmpty() ? 1.0f : 0.0f;
-    const auto speed = target > badgeHoverAmount ? 0.22f : 0.15f;
-    badgeHoverAmount += (target - badgeHoverAmount) * speed;
-    if (std::abs (target - badgeHoverAmount) < 0.008f) badgeHoverAmount = target;
+    const auto armed = processor.isParameterLearnArmed();
+    if (learnUndoTracking && learnWasArmed && ! armed)
+    {
+        const auto after = processor.getSlotMappings (learnUndoSlot);
+        pushMappingSnapshot (learnUndoSlot, std::move (learnUndoBefore), after, "Learn parameter mapping");
+        learnUndoBefore.clear();
+        learnUndoTracking = false;
+        learnUndoSlot = -1;
+    }
+    learnWasArmed = armed;
+
+    undoButton.setEnabled (undoManager.canUndo());
     parameterList.repaint();
     repaint();
 }
@@ -461,8 +860,17 @@ void ParameterInspector::refreshData (bool forceRebuild)
 {
     const auto slot = processor.getSelectedSlot();
     const auto pluginName = processor.getSlotPluginName (slot);
+    const auto slotChanged = slot != lastSlot || pluginName != lastPluginName;
     const auto oldMappingId = juce::isPositiveAndBelow (selectedMappingRow, static_cast<int> (mappings.size()))
                             ? mappings[static_cast<size_t> (selectedMappingRow)].id.toString() : juce::String();
+
+    if (slotChanged)
+    {
+        undoManager.clearUndoHistory();
+        learnUndoTracking = false;
+        learnUndoBefore.clear();
+        learnUndoSlot = -1;
+    }
 
     parameters = processor.getSlotParameters (slot);
     mappings = processor.getSlotMappings (slot);
@@ -508,6 +916,7 @@ void ParameterInspector::mappingSelectionChanged (int row)
 {
     selectedMappingRow = juce::isPositiveAndBelow (row, static_cast<int> (mappings.size())) ? row : -1;
     loadSelectedMappingControls();
+    parameterList.repaint();
 }
 
 const ParameterDescriptor* ParameterInspector::descriptorForBinding (const GestureBinding& binding) const
@@ -540,6 +949,8 @@ void ParameterInspector::loadSelectedMappingControls()
 void ParameterInspector::applySelectedMappingControls()
 {
     if (! juce::isPositiveAndBelow (selectedMappingRow, static_cast<int> (mappings.size()))) return;
+    const auto slot = processor.getSelectedSlot();
+    const auto before = processor.getSlotMappings (slot);
     auto binding = mappings[static_cast<size_t> (selectedMappingRow)];
     binding.enabled = mappingEnabledButton.getToggleState();
 
@@ -558,10 +969,17 @@ void ParameterInspector::applySelectedMappingControls()
     }
 
     juce::String error;
-    processor.updateGestureMapping (binding, error);
+    if (! processor.updateGestureMapping (binding, error))
+    {
+        statusLabel.setText (error.isNotEmpty() ? error : "UPDATE FAILED", juce::dontSendNotification);
+        return;
+    }
     mappings[static_cast<size_t> (selectedMappingRow)] = binding;
-    statusLabel.setText (error.isEmpty() ? "MAPPING UPDATED" : error, juce::dontSendNotification);
+    const auto after = processor.getSlotMappings (slot);
+    pushMappingSnapshot (slot, before, after, "Edit mapping");
+    statusLabel.setText ("MAPPING UPDATED", juce::dontSendNotification);
     updateControlEnablement();
+    parameterList.repaint();
     repaint();
 }
 
@@ -590,20 +1008,8 @@ void ParameterInspector::updateAdvancedVisibility()
     for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &smoothingSlider, &deadbandSlider }) slider->setVisible (advancedExpanded);
     for (auto* toggle : { &invertButton, &mappingEnabledButton }) toggle->setVisible (advancedExpanded);
     for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton }) button->setVisible (advancedExpanded);
-    advancedButton.setButtonText (advancedExpanded ? "BASIC" : "ADVANCED");
-    advancedButton.setToggleState (advancedExpanded, juce::dontSendNotification);
-}
-
-juce::String ParameterInspector::gestureBadgesForParameter (const ParameterDescriptor& descriptor) const
-{
-    juce::String badges;
-    for (const auto& binding : mappings)
-    {
-        if (! mappingTargetsParameter (binding, descriptor)) continue;
-        if (badges.isNotEmpty()) badges += "  ·  ";
-        badges += controlGestureToShortLabel (binding.sourceGesture);
-    }
-    return badges;
+    statusLabel.setVisible (advancedExpanded);
+    moreButton.setToggleState (advancedExpanded, juce::dontSendNotification);
 }
 
 bool ParameterInspector::isParameterMappingResolved (const GestureBinding& binding) const
@@ -615,76 +1021,89 @@ bool ParameterInspector::isParameterMappingResolved (const GestureBinding& bindi
 juce::String ParameterInspector::describeBinding (const GestureBinding& binding) const
 {
     const auto target = binding.targetType == MappingTargetType::slotAction ? mappingModeToString (binding.mode) : binding.parameterName;
-    auto text = controlGestureToShortLabel (binding.sourceGesture) + " → " + target;
+    auto result = gestureUiLabel (binding.sourceGesture) + "  ->  " + target;
     if (binding.targetType == MappingTargetType::childParameter)
     {
-        text += "  [" + mappingModeToString (binding.mode) + "]";
+        result += "  [" + mappingModeToString (binding.mode) + "]";
         if (binding.mode == MappingMode::absoluteHeight)
-        {
-            text += "  " + juce::String (binding.minValue * 100.0f, 0) + "–" + juce::String (binding.maxValue * 100.0f, 0) + "%";
-            if (std::abs (binding.curve) > 0.01f) text += "  C" + juce::String (binding.curve, 2);
-        }
-        if (binding.inverted) text += "  INV";
+            result += "  " + juce::String (binding.minValue * 100.0f, 0) + "-" + juce::String (binding.maxValue * 100.0f, 0) + "%";
+        if (binding.inverted) result += "  INV";
     }
-    if (! binding.enabled) text += "  OFF";
-    return text;
+    if (! binding.enabled) result += "  OFF";
+    return result;
 }
 
 void ParameterInspector::paint (juce::Graphics& g)
 {
     ui::drawPanel (g, getLocalBounds().toFloat(), true);
-    ui::drawSectionTitle (g, "PARAMETERS", { 14, 8, getWidth() - 250, 22 });
+    auto header = getLocalBounds().reduced (14).removeFromTop (26);
+    auto title = header;
+    title.removeFromRight (86);
+    ui::drawIcon (g, ui::Icon::sliders, title.removeFromLeft (22).withSizeKeepingCentre (18, 18).toFloat(), ui::text, 1.45f);
+    title.removeFromLeft (5);
+    ui::drawSectionTitle (g, "PARAMETERS", title);
 
-    const auto snapshot = processor.getDualHandVisionSnapshot();
-    auto meter = juce::Rectangle<int> (juce::jmax (14, getWidth() - 246), 9, 126, 20);
-    const auto rightPresent = snapshot.right.present;
-    const auto height = rightPresent ? juce::jlimit (0.0f, 1.0f, snapshot.right.height) : 0.0f;
-    g.setColour (ui::control);
-    g.fillRoundedRectangle (meter.toFloat(), 5.0f);
-    if (rightPresent)
+    if (! columnHeaderBounds.isEmpty())
     {
-        auto fill = meter.toFloat().reduced (1.0f);
-        fill.setWidth (juce::jmax (2.0f, fill.getWidth() * height));
-        g.setColour (ui::accent.withAlpha (0.18f));
-        g.fillRoundedRectangle (fill, 4.0f);
+        const auto columns = layoutRowColumns (parameterList.getWidth(), columnHeaderBounds.getHeight());
+        auto offset = juce::Point<int> (parameterList.getX(), columnHeaderBounds.getY());
+        g.setColour (ui::textMuted);
+        g.setFont (ui::metaFont());
+        g.drawText ("PARAMETER", columns.parameter.translated (offset.x, 0).withY (columnHeaderBounds.getY()), juce::Justification::centredLeft);
+        g.drawText ("RANGE", columns.range.translated (offset.x, 0).withY (columnHeaderBounds.getY()), juce::Justification::centredLeft);
+        g.drawText ("GESTURE", columns.gesture.translated (offset.x, 0).withY (columnHeaderBounds.getY()), juce::Justification::centredLeft);
     }
-    g.setColour (rightPresent ? ui::text : ui::textMuted);
-    g.setFont (ui::font (8.8f, juce::Font::bold));
-    g.drawText (rightPresent ? "R " + juce::String (height * 100.0f, 0) + "%" : juce::String ("R --"),
-                meter, juce::Justification::centred);
+
+    if (! learnDropBounds.isEmpty())
+    {
+        const auto armed = processor.isParameterLearnArmed();
+        const auto preview = learnDropPreview != ControlGesture::unknown;
+        const auto active = armed || preview;
+        auto rect = learnDropBounds.toFloat().reduced (0.5f);
+        g.setColour (active ? ui::accent.withAlpha (0.045f) : ui::workspace);
+        g.fillRoundedRectangle (rect, 8.0f);
+        ui::drawDashedRoundedRect (g, rect, 8.0f, active ? ui::accent : ui::border, 1.0f, 5.0f, 4.0f);
+        auto iconArea = learnDropBounds.withSizeKeepingCentre (42, 42).translated (0, -24);
+        ui::drawIcon (g, ui::Icon::palm, iconArea.toFloat(), active ? ui::accent : ui::textMuted, 1.65f);
+        g.setFont (ui::controlFont());
+        g.setColour (active ? ui::accent : ui::textMuted);
+        juce::String line1 = "DROP GESTURE";
+        juce::String line2;
+        if (armed)
+        {
+            line1 = "MOVE A PLUGIN CONTROL";
+            line2 = processor.getParameterLearnStatus();
+        }
+        else if (preview)
+            line2 = gestureUiLabel (learnDropPreview);
+        auto textArea = learnDropBounds.reduced (10, 12);
+        textArea.setY (learnDropBounds.getCentreY() + 10);
+        textArea.setHeight (44);
+        g.drawFittedText (line1, textArea.removeFromTop (20), juce::Justification::centred, 1);
+        if (line2.isNotEmpty())
+        {
+            g.setColour (ui::textMuted);
+            g.setFont (ui::metaFont());
+            g.drawFittedText (line2, textArea, juce::Justification::centred, 2);
+        }
+    }
 
     if (advancedExpanded)
     {
         g.setColour (ui::textMuted);
-        g.setFont (ui::font (8.4f, juce::Font::bold));
-        g.drawText ("ASSIGNED", mappingList.getX(), mappingList.getY() - 16,
-                    mappingList.getWidth(), 14, juce::Justification::centredLeft);
-
-        const auto labelY = behaviorBox.getY() - 15;
-        g.drawText ("BEHAVIOR", behaviorBox.getX(), labelY, behaviorBox.getWidth(), 14, juce::Justification::centredLeft);
-        g.drawText ("MIN", minSlider.getX(), labelY, minSlider.getWidth(), 14, juce::Justification::centredLeft);
-        g.drawText ("MAX", maxSlider.getX(), labelY, maxSlider.getWidth(), 14, juce::Justification::centredLeft);
-        g.drawText ("CURVE", curveSlider.getX(), labelY, curveSlider.getWidth(), 14, juce::Justification::centredLeft);
-        g.drawText ("SMOOTH", smoothingSlider.getX(), labelY, smoothingSlider.getWidth(), 14, juce::Justification::centredLeft);
-        g.drawText ("DEAD", deadbandSlider.getX(), labelY, deadbandSlider.getWidth(), 14, juce::Justification::centredLeft);
-
-        if (curveSlider.isEnabled())
+        g.setFont (ui::metaFont());
+        if (! mappingList.getBounds().isEmpty())
+            g.drawText ("ASSIGNED", mappingList.getX(), mappingList.getY() - 16,
+                        mappingList.getWidth(), 14, juce::Justification::centredLeft);
+        if (! behaviorBox.getBounds().isEmpty())
         {
-            auto graph = juce::Rectangle<float> (static_cast<float> (curveSlider.getX()),
-                                                  static_cast<float> (curveSlider.getBottom() + 4),
-                                                  static_cast<float> (curveSlider.getWidth()), 22.0f);
-            g.setColour (ui::workspace);
-            g.fillRoundedRectangle (graph, 4.0f);
-            juce::Path path;
-            for (int i = 0; i <= 24; ++i)
-            {
-                const auto x = static_cast<float> (i) / 24.0f;
-                const auto y = applyMappingCurve (x, static_cast<float> (curveSlider.getValue()));
-                const juce::Point<float> p { graph.getX() + x * graph.getWidth(), graph.getBottom() - y * graph.getHeight() };
-                if (i == 0) path.startNewSubPath (p); else path.lineTo (p);
-            }
-            g.setColour (ui::accent);
-            g.strokePath (path, juce::PathStrokeType (1.4f));
+            const auto labelY = behaviorBox.getY() - 15;
+            g.drawText ("BEHAVIOR", behaviorBox.getX(), labelY, behaviorBox.getWidth(), 14, juce::Justification::centredLeft);
+            g.drawText ("MIN", minSlider.getX(), labelY, minSlider.getWidth(), 14, juce::Justification::centredLeft);
+            g.drawText ("MAX", maxSlider.getX(), labelY, maxSlider.getWidth(), 14, juce::Justification::centredLeft);
+            g.drawText ("CURVE", curveSlider.getX(), labelY, curveSlider.getWidth(), 14, juce::Justification::centredLeft);
+            g.drawText ("SMOOTH", smoothingSlider.getX(), labelY, smoothingSlider.getWidth(), 14, juce::Justification::centredLeft);
+            g.drawText ("DEAD", deadbandSlider.getX(), labelY, deadbandSlider.getWidth(), 14, juce::Justification::centredLeft);
         }
     }
 }
@@ -692,52 +1111,74 @@ void ParameterInspector::paint (juce::Graphics& g)
 void ParameterInspector::resized()
 {
     auto bounds = getLocalBounds().reduced (14);
-    auto header = bounds.removeFromTop (24);
-    advancedButton.setBounds (header.removeFromRight (94));
-    bounds.removeFromTop (6);
-    helpLabel.setBounds (bounds.removeFromTop (18));
+    auto header = bounds.removeFromTop (26);
+    moreButton.setBounds (header.removeFromRight (34));
+    header.removeFromRight (6);
+    undoButton.setBounds (header.removeFromRight (34));
     bounds.removeFromTop (6);
 
-    auto footer = bounds.removeFromBottom (22);
-    statusLabel.setBounds (footer);
-    bounds.removeFromBottom (6);
+    columnHeaderBounds = bounds.removeFromTop (20);
+    bounds.removeFromTop (3);
+
+    juce::Rectangle<int> advancedArea;
+    if (advancedExpanded)
+    {
+        advancedArea = bounds.removeFromBottom (160);
+        bounds.removeFromBottom (10);
+    }
+
+    const auto dropWidth = juce::jlimit (168, 224, juce::roundToInt (static_cast<float> (bounds.getWidth()) * 0.19f));
+    learnDropBounds = bounds.removeFromRight (dropWidth);
+    bounds.removeFromRight (12);
+    parameterList.setBounds (bounds);
 
     if (! advancedExpanded)
     {
-        parameterList.setBounds (bounds);
         mappingList.setBounds ({});
         behaviorBox.setBounds ({});
         for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &smoothingSlider, &deadbandSlider }) slider->setBounds ({});
         for (auto* toggle : { &invertButton, &mappingEnabledButton }) toggle->setBounds ({});
         for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton }) button->setBounds ({});
+        statusLabel.setBounds ({});
         return;
     }
 
-    auto advanced = bounds.removeFromBottom (142);
-    bounds.removeFromBottom (8);
-    auto lists = bounds;
-    auto left = lists.removeFromLeft (lists.getWidth() * 64 / 100);
-    parameterList.setBounds (left);
-    lists.removeFromLeft (8);
-    mappingList.setBounds (lists);
+    auto left = advancedArea.removeFromLeft (juce::jmax (240, advancedArea.getWidth() * 34 / 100));
+    mappingList.setBounds (left.withTrimmedTop (18).withTrimmedBottom (22));
+    auto status = left.removeFromBottom (18);
+    statusLabel.setBounds (status);
+    advancedArea.removeFromLeft (10);
+    advancedArea.removeFromTop (18);
 
-    advanced.removeFromTop (18);
-    auto row = advanced.removeFromTop (34);
+    auto sliders = advancedArea.removeFromTop (52);
     constexpr int gap = 5;
-    const auto width = juce::jmax (70, (row.getWidth() - gap * 5) / 6);
-    behaviorBox.setBounds (row.removeFromLeft (width)); row.removeFromLeft (gap);
-    minSlider.setBounds (row.removeFromLeft (width)); row.removeFromLeft (gap);
-    maxSlider.setBounds (row.removeFromLeft (width)); row.removeFromLeft (gap);
-    curveSlider.setBounds (row.removeFromLeft (width)); row.removeFromLeft (gap);
-    smoothingSlider.setBounds (row.removeFromLeft (width)); row.removeFromLeft (gap);
-    deadbandSlider.setBounds (row);
+    const auto width = juce::jmax (66, (sliders.getWidth() - gap * 5) / 6);
+    behaviorBox.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
+    minSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
+    maxSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
+    curveSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
+    smoothingSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
+    deadbandSlider.setBounds (sliders);
 
-    advanced.removeFromTop (28);
-    auto actions = advanced.removeFromTop (30);
+    advancedArea.removeFromTop (18);
+    auto actions = advancedArea.removeFromTop (30);
     livePresetButton.setBounds (actions.removeFromLeft (86)); actions.removeFromLeft (5);
     smoothPresetButton.setBounds (actions.removeFromLeft (100)); actions.removeFromLeft (8);
-    invertButton.setBounds (actions.removeFromLeft (78)); actions.removeFromLeft (5);
+    invertButton.setBounds (actions.removeFromLeft (76)); actions.removeFromLeft (5);
     mappingEnabledButton.setBounds (actions.removeFromLeft (52)); actions.removeFromLeft (8);
     removeMappingButton.setBounds (actions.removeFromLeft (82));
+}
+
+void ParameterInspector::mouseDown (const juce::MouseEvent& e)
+{
+    if (! learnDropBounds.contains (e.getPosition())) return;
+    if (processor.isParameterLearnArmed())
+    {
+        processor.cancelParameterLearn();
+        learnUndoTracking = false;
+        learnUndoBefore.clear();
+        learnUndoSlot = -1;
+        repaint();
+    }
 }
 }

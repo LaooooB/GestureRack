@@ -10,25 +10,18 @@
 
 namespace gr
 {
-// JUCE's default ScrollBar deliberately quantises small wheel deltas to at least one
-// full single-step. That feels rigid in a dense parameter list. This ListBox keeps
-// high-resolution wheel deltas and eases the viewport toward the requested position.
 class SmoothListBox final : public juce::ListBox,
                             private juce::Timer
 {
 public:
     SmoothListBox (const juce::String& componentName = {}, juce::ListBoxModel* model = nullptr)
-        : juce::ListBox (componentName, model)
-    {
-    }
+        : juce::ListBox (componentName, model) {}
 
     ~SmoothListBox() override { stopTimer(); }
 
-    // Parameter rows are intentionally large touch/drop targets. The Advanced assignment
-    // list remains compact enough to show several mappings at once.
     void setRowHeight (int newHeight)
     {
-        const auto minimum = getName() == "Parameters" ? 50 : 32;
+        const auto minimum = getName() == "Parameters" ? 46 : 32;
         const auto adjusted = juce::jmax (minimum, newHeight);
         juce::ListBox::setRowHeight (adjusted);
         getVerticalScrollBar().setSingleStepSize (juce::jmax (8.0, adjusted * 0.55));
@@ -44,15 +37,11 @@ public:
             return;
         }
 
-        if (! isTimerRunning())
-            targetStart = bar.getCurrentRangeStart();
-
-        const auto travel = juce::jmax (24.0, static_cast<double> (getRowHeight()) * 4.6);
+        if (! isTimerRunning()) targetStart = bar.getCurrentRangeStart();
+        const auto travel = juce::jmax (24.0, static_cast<double> (getRowHeight()) * 4.4);
         targetStart -= static_cast<double> (wheel.deltaY) * travel;
-
         const auto minimum = bar.getMinimumRangeLimit();
-        const auto maximum = juce::jmax (minimum,
-                                         bar.getMaximumRangeLimit() - bar.getCurrentRangeSize());
+        const auto maximum = juce::jmax (minimum, bar.getMaximumRangeLimit() - bar.getCurrentRangeSize());
         targetStart = juce::jlimit (minimum, maximum, targetStart);
         startTimerHz (60);
     }
@@ -69,9 +58,6 @@ private:
             stopTimer();
             return;
         }
-
-        // A quick response with a longer ease-out keeps wheel and trackpad scrolling
-        // precise without the old row-by-row stepping sensation.
         bar.setCurrentRangeStart (current + difference * 0.24, juce::sendNotificationSync);
     }
 
@@ -87,77 +73,22 @@ public:
 
     void paint (juce::Graphics& g) override;
     void resized() override;
-
-    // Add a clear, large mapping affordance on empty automatable rows. The actual drop
-    // target remains the entire parameter row, so the visual affordance is forgiving
-    // rather than forcing the user to hit a tiny badge.
-    void paintOverChildren (juce::Graphics& g) override
-    {
-        if (parameterList.getWidth() <= 0 || parameterList.getHeight() <= 0) return;
-
-        const auto laneWidth = juce::jlimit (190, 232, parameterList.getWidth() / 4);
-        for (int row = 0; row < static_cast<int> (parameters.size()); ++row)
-        {
-            const auto& descriptor = parameters[static_cast<size_t> (row)];
-            if (! descriptor.automatable) continue;
-
-            bool alreadyMapped = false;
-            for (const auto& binding : mappings)
-            {
-                if (binding.targetType != MappingTargetType::childParameter) continue;
-                const auto stableMatch = binding.parameterStableId.isNotEmpty()
-                                      && descriptor.stableId.isNotEmpty()
-                                      && binding.parameterStableId == descriptor.stableId;
-                const auto fallbackMatch = binding.parameterIndexFallback == descriptor.index
-                                        && binding.parameterName == descriptor.name;
-                if (stableMatch || fallbackMatch)
-                {
-                    alreadyMapped = true;
-                    break;
-                }
-            }
-            if (alreadyMapped) continue;
-
-            auto* rowComponent = parameterList.getComponentForRowNumber (row);
-            if (rowComponent == nullptr) continue;
-            const auto topLeft = getLocalPoint (rowComponent, juce::Point<int> {});
-            auto lane = juce::Rectangle<int> (parameterList.getRight() - laneWidth - 8,
-                                               topLeft.y + 6,
-                                               laneWidth,
-                                               juce::jmax (20, rowComponent->getHeight() - 12));
-            lane = lane.getIntersection (parameterList.getBounds().reduced (2));
-            if (lane.isEmpty()) continue;
-
-            const auto hot = row == gestureDropPreviewRow
-                          && gestureDropPreview != ControlGesture::unknown;
-            g.setColour (hot ? ui::accent.withAlpha (0.09f) : ui::surfaceHigh.withAlpha (0.92f));
-            g.fillRoundedRectangle (lane.toFloat(), 7.0f);
-
-            juce::Path outline;
-            outline.addRoundedRectangle (lane.toFloat().reduced (0.5f), 7.0f);
-            const float dashPattern[] { 5.0f, 4.0f };
-            juce::Path dashed;
-            juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded)
-                .createDashedStroke (dashed, outline, dashPattern, 2);
-            g.setColour (hot ? ui::accent : ui::border.withAlpha (0.82f));
-            g.fillPath (dashed);
-
-            g.setColour (hot ? ui::accent : ui::textMuted.withAlpha (0.82f));
-            g.setFont (ui::font (10.2f, juce::Font::bold));
-            const auto label = hot && gestureDropPreview != ControlGesture::unknown
-                             ? controlGestureToShortLabel (gestureDropPreview) + "  +  ADD"
-                             : juce::String ("+  DROP GESTURE");
-            g.drawFittedText (label, lane.reduced (8, 0), juce::Justification::centred, 1);
-        }
-    }
+    void mouseDown (const juce::MouseEvent& e) override;
 
     bool dropGestureAt (ControlGesture gesture, juce::Point<int> localPoint);
     void setGestureDragPreview (ControlGesture gesture, juce::Point<int> localPoint);
     void clearGestureDragPreview();
 
+    bool assignSlotActionGesture (ControlGesture gesture, MappingMode mode);
+
+    bool undoLastMapping();
+    bool redoLastMapping();
+    bool canUndoMapping() const { return undoManager.canUndo(); }
+
 private:
     class ParameterListModel;
     class MappingListModel;
+    class MappingSnapshotAction;
 
     void timerCallback() override;
     void refreshData (bool forceRebuild);
@@ -169,8 +100,15 @@ private:
     void updateAdvancedVisibility();
     void setHoveredMapping (juce::String mappingId);
 
+    void removeMappingAt (int mappingIndex, const juce::String& reason);
+    int rangeMappingIndexForParameter (const ParameterDescriptor& descriptor) const;
+    void updateRangeBindingLive (const juce::Uuid& id, float value, bool minimumHandle);
+    void pushMappingSnapshot (int slotIndex,
+                              std::vector<GestureBinding> before,
+                              std::vector<GestureBinding> after,
+                              const juce::String& transactionName);
+
     juce::String describeBinding (const GestureBinding& binding) const;
-    juce::String gestureBadgesForParameter (const ParameterDescriptor& descriptor) const;
     bool isParameterMappingResolved (const GestureBinding& binding) const;
     const ParameterDescriptor* descriptorForBinding (const GestureBinding& binding) const;
 
@@ -180,9 +118,8 @@ private:
     SmoothListBox parameterList;
     SmoothListBox mappingList;
 
-    juce::Label helpLabel;
-    juce::Label statusLabel;
-    ui::AnimatedTextButton advancedButton { "ADVANCED" };
+    ui::IconButton undoButton { ui::Icon::undo, "Undo mapping" };
+    ui::IconButton moreButton { ui::Icon::more, "Mapping options" };
 
     juce::ComboBox behaviorBox;
     juce::Slider minSlider;
@@ -195,6 +132,7 @@ private:
     ui::AnimatedTextButton removeMappingButton { "REMOVE" };
     ui::AnimatedTextButton livePresetButton { "LIVE 25ms" };
     ui::AnimatedTextButton smoothPresetButton { "SMOOTH 80ms" };
+    juce::Label statusLabel;
 
     std::vector<ParameterDescriptor> parameters;
     std::vector<GestureBinding> mappings;
@@ -202,12 +140,21 @@ private:
     int selectedMappingRow = -1;
     int gestureDropPreviewRow = -1;
     ControlGesture gestureDropPreview = ControlGesture::unknown;
+    ControlGesture learnDropPreview = ControlGesture::unknown;
+    juce::String hoveredMappingId;
     int lastSlot = -1;
     juce::String lastPluginName;
-    juce::String hoveredMappingId;
-    float badgeHoverAmount = 0.0f;
     bool advancedExpanded = false;
     bool loadingControls = false;
+
+    juce::Rectangle<int> columnHeaderBounds;
+    juce::Rectangle<int> learnDropBounds;
+
+    juce::UndoManager undoManager { 64, 128 };
+    bool learnUndoTracking = false;
+    bool learnWasArmed = false;
+    int learnUndoSlot = -1;
+    std::vector<GestureBinding> learnUndoBefore;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParameterInspector)
 };
