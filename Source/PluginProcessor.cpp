@@ -8,7 +8,7 @@ constexpr auto slotTag = "SLOT";
 constexpr auto descriptionTag = "PLUGIN_DESCRIPTION";
 constexpr auto pluginStateTag = "PLUGIN_STATE";
 constexpr auto mappingsTag = "MAPPINGS";
-constexpr int currentStateVersion = 5;
+constexpr int currentStateVersion = 6;
 }
 
 GestureRackAudioProcessor::GestureRackAudioProcessor()
@@ -161,11 +161,14 @@ void GestureRackAudioProcessor::timerCallback()
         }
         if (runtimeFrame.continuousActive && runtimeFrame.gesture != gr::ControlGesture::unknown)
             mappingEngine.processContinuous (slotIndex, runtimeFrame.gesture,
-                                             snapshot.right.height, controlDeltaSeconds);
+                                             snapshot.right.palmX,
+                                             snapshot.right.height,
+                                             controlDeltaSeconds);
     }
 
     if (testing)
-        mappingEngine.processContinuous (getSelectedSlot(), getTestGesture(), getTestHeight(), controlDeltaSeconds);
+        mappingEngine.processContinuous (getSelectedSlot(), getTestGesture(),
+                                         0.5f, getTestHeight(), controlDeltaSeconds);
 
     if (const auto capture = parameterLearnManager.pollCapture(); capture.has_value())
     {
@@ -641,12 +644,15 @@ void GestureRackAudioProcessor::restoreSlotFromXml (const juce::XmlElement& slot
                 if (auto binding = gr::GestureBinding::fromXml (*bindingXml); binding.has_value())
                 {
                     binding->slotIndex = slotIndex;
-                    // Old projects could contain many targets for one gesture. Preserve
-                    // deterministic product semantics by keeping the last saved binding.
-                    juce::String ignored;
-                    for (const auto& existing : slot.getMappings())
-                        if (existing.sourceGesture == binding->sourceGesture)
-                            slot.removeMapping (existing.id);
+
+                    // State v3 still came from the old exclusive-gesture model.
+                    // Modern states intentionally support gesture fan-out, so never
+                    // delete sibling mappings simply because they share a source.
+                    if (stateVersion <= 3)
+                        for (const auto& existing : slot.getMappings())
+                            if (existing.sourceGesture == binding->sourceGesture)
+                                slot.removeMapping (existing.id);
+
                     slot.addMapping (*binding);
                 }
 
