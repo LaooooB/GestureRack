@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include <array>
 #include <cmath>
+#include "BinaryData.h"
 #include "UiMetrics.h"
 
 namespace gr::ui
@@ -42,29 +43,86 @@ constexpr int major = 24;
 constexpr float panelRadius = metrics::panelRadius;
 constexpr float controlRadius = metrics::controlRadius;
 
-inline juce::String fontFamily()
+namespace embeddedType
 {
-    // Inter is the target UI family from the PRISIM handoff. JUCE will fall back to
-    // the platform sans face when Inter is not installed, keeping old installations safe.
-    return "Inter";
+enum class Weight
+{
+    regular,
+    semibold,
+    bold,
+    display
+};
+
+inline juce::Typeface::Ptr load (const void* data, int size)
+{
+    jassert (data != nullptr && size > 0);
+    return juce::Typeface::createSystemTypefaceFor (data, static_cast<size_t> (size));
 }
 
-inline juce::Font font (float height, int style = juce::Font::plain, float tracking = 0.0f)
+inline juce::Typeface::Ptr get (Weight weight)
 {
-    auto result = juce::Font (juce::FontOptions (fontFamily(), juce::jmax (8.0f, height), style));
+    // These are the exact hinted static TTF faces used by the PRISIM handoff.
+    // They live inside the VST3 binary, so no installed system font can change
+    // Gesture Rack's metrics, weight selection or glyph outlines.
+    static juce::Typeface::Ptr regularTypeface = load (BinaryData::InterRegular_ttf,
+                                                        BinaryData::InterRegular_ttfSize);
+    static juce::Typeface::Ptr semiboldTypeface = load (BinaryData::InterSemiBold_ttf,
+                                                         BinaryData::InterSemiBold_ttfSize);
+    static juce::Typeface::Ptr boldTypeface = load (BinaryData::InterBold_ttf,
+                                                     BinaryData::InterBold_ttfSize);
+    static juce::Typeface::Ptr displayTypeface = load (BinaryData::InterDisplayExtraBold_ttf,
+                                                        BinaryData::InterDisplayExtraBold_ttfSize);
+
+    switch (weight)
+    {
+        case Weight::semibold: return semiboldTypeface;
+        case Weight::bold:     return boldTypeface;
+        case Weight::display:  return displayTypeface;
+        case Weight::regular:  break;
+    }
+    return regularTypeface;
+}
+}
+
+inline juce::String fontFamily()
+{
+    const auto typeface = embeddedType::get (embeddedType::Weight::regular);
+    return typeface != nullptr ? typeface->getName() : juce::String();
+}
+
+inline juce::Font font (float height, embeddedType::Weight weight, float tracking = 0.0f)
+{
+    const auto typeface = embeddedType::get (weight);
+    jassert (typeface != nullptr);
+    auto result = juce::Font (juce::FontOptions (typeface).withHeight (juce::jmax (8.0f, height)));
     if (tracking != 0.0f) result = result.withExtraKerningFactor (tracking);
     return result;
 }
 
-// Keep the existing component hierarchy, but adopt PRISIM's quieter type scale.
-inline juce::Font appTitleFont() { return font (17.0f, juce::Font::bold, 0.045f); }
-inline juce::Font titleFont()    { return font (15.5f, juce::Font::bold, 0.025f); }
-inline juce::Font sectionFont()  { return font (10.0f, juce::Font::bold, 0.12f); }
-inline juce::Font rowFont()      { return font (12.0f, juce::Font::plain); }
-inline juce::Font controlFont()  { return font (11.0f, juce::Font::plain); }
-inline juce::Font comboFont()    { return font (12.0f, juce::Font::bold); }
-inline juce::Font popupFont()    { return font (11.5f, juce::Font::plain); }
-inline juce::Font metaFont()     { return font (9.0f, juce::Font::plain); }
+// Compatibility overload for existing call sites. PRISIM's handoff maps the old
+// boolean/bold path to SemiBold rather than asking the OS for a synthetic bold face.
+inline juce::Font font (float height, int style = juce::Font::plain, float tracking = 0.0f)
+{
+    const auto weight = (style & juce::Font::bold) != 0
+        ? embeddedType::Weight::semibold
+        : embeddedType::Weight::regular;
+    auto result = font (height, weight, tracking);
+    if ((style & juce::Font::underlined) != 0) result.setUnderline (true);
+    // No UI call site should request synthetic italic; keeping it out avoids a hidden
+    // platform typeface lookup that would break deterministic typography.
+    jassert ((style & juce::Font::italic) == 0);
+    return result;
+}
+
+// Keep the current Gesture Rack layout scale, but use PRISIM's exact embedded faces.
+inline juce::Font appTitleFont() { return font (17.0f, embeddedType::Weight::display, 0.045f); }
+inline juce::Font titleFont()    { return font (15.5f, embeddedType::Weight::semibold, 0.025f); }
+inline juce::Font sectionFont()  { return font (10.0f, embeddedType::Weight::semibold, 0.12f); }
+inline juce::Font rowFont()      { return font (12.0f, embeddedType::Weight::regular); }
+inline juce::Font controlFont()  { return font (11.0f, embeddedType::Weight::regular); }
+inline juce::Font comboFont()    { return font (12.0f, embeddedType::Weight::semibold); }
+inline juce::Font popupFont()    { return font (11.5f, embeddedType::Weight::regular); }
+inline juce::Font metaFont()     { return font (9.0f, embeddedType::Weight::regular); }
 
 inline juce::Colour blend (juce::Colour a, juce::Colour b, float amount)
 {
@@ -257,7 +315,7 @@ inline std::array<juce::Path, static_cast<size_t> (Icon::count)> buildIconPaths(
     addArrow (Icon::arrowUp,    {12, 20}, {12, 4},  {7, 9},  {17, 9});
     addArrow (Icon::arrowDown,  {12, 4},  {12, 20}, {7, 15}, {17, 15});
     addArrow (Icon::arrowLeft,  {20, 12}, {4, 12},  {9, 7},  {9, 17});
-    addArrow (Icon::arrowRight, {4, 12},  {20, 12}, {15, 7}, {15, 17});
+    addArrow (Icon::arrowRight, {4, 12}, {20, 12}, {15, 7}, {15, 17});
 
     auto& toggle = paths[static_cast<size_t> (Icon::toggle)];
     toggle.addRoundedRectangle (3, 8, 18, 8, 4); toggle.addEllipse (5, 9, 6, 6);
