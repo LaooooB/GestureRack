@@ -17,7 +17,8 @@ juce::String compactPluginName (const juce::PluginDescription& description)
 
 float approachHover (float current, float target)
 {
-    const auto speed = target > current ? 0.24f : 0.16f;
+    // The PRISIM reference is intentionally snappier than the previous rack UI.
+    const auto speed = target > current ? 0.40f : 0.32f;
     current += (target - current) * speed;
     if (std::abs (target - current) < 0.008f)
         current = target;
@@ -79,10 +80,10 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     searchBox.setFont (ui::font (11.0f));
     searchBox.setColour (juce::TextEditor::backgroundColourId, ui::control);
     searchBox.setColour (juce::TextEditor::textColourId, ui::text);
-    searchBox.setColour (juce::TextEditor::highlightColourId, ui::accent.withAlpha (0.24f));
+    searchBox.setColour (juce::TextEditor::highlightColourId, ui::accent.withAlpha (0.18f));
     searchBox.setColour (juce::TextEditor::highlightedTextColourId, ui::text);
     searchBox.setColour (juce::TextEditor::outlineColourId, ui::border);
-    searchBox.setColour (juce::TextEditor::focusedOutlineColourId, ui::accent);
+    searchBox.setColour (juce::TextEditor::focusedOutlineColourId, ui::accentDim);
     searchBox.setColour (juce::CaretComponent::caretColourId, ui::accent);
     searchBox.onTextChange = [this] { rebuildFilter(); };
     searchBox.onReturnKey = [this] { loadSelected(); };
@@ -102,7 +103,7 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     categoryList.setColour (juce::ListBox::backgroundColourId, ui::workspace);
     categoryList.setColour (juce::ListBox::outlineColourId, ui::border.withAlpha (0.62f));
     categoryList.setOutlineThickness (1);
-    categoryList.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.58f));
+    categoryList.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.42f));
     categoryList.getVerticalScrollBar().setColour (juce::ScrollBar::backgroundColourId, ui::workspace);
     categoryList.selectRow (0, true, true);
 
@@ -111,7 +112,7 @@ PluginBrowserComponent::PluginBrowserComponent (LoadCallback loadCallbackToUse,
     resultList.setColour (juce::ListBox::backgroundColourId, ui::workspace);
     resultList.setColour (juce::ListBox::outlineColourId, ui::border.withAlpha (0.62f));
     resultList.setOutlineThickness (1);
-    resultList.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.58f));
+    resultList.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.42f));
     resultList.getVerticalScrollBar().setColour (juce::ScrollBar::backgroundColourId, ui::workspace);
 
     addAndMakeVisible (statusLabel);
@@ -183,22 +184,22 @@ void PluginBrowserComponent::paintListBoxItem (int rowNumber, juce::Graphics& g,
                      ? resultHoverAmounts[static_cast<size_t> (rowNumber)] : 0.0f;
     auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (6, 3);
 
-    auto fill = (rowNumber & 1) != 0 ? ui::surfaceHigh.withAlpha (0.18f) : ui::workspace;
-    fill = ui::blend (fill, ui::canvas, hover * 0.48f);
+    auto fill = (rowNumber & 1) != 0 ? ui::surfaceHigh.withAlpha (0.30f) : ui::workspace;
+    fill = ui::blend (fill, ui::controlHigh, hover * 0.64f);
     if (rowIsSelected)
         fill = ui::blend (fill, ui::accent, 0.075f);
 
     if (hover > 0.01f || rowIsSelected || (rowNumber & 1) != 0)
     {
         g.setColour (fill);
-        g.fillRoundedRectangle (bounds.toFloat(), 6.0f);
+        g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
     }
 
     if (hover > 0.01f || rowIsSelected)
     {
-        const auto focus = juce::jmax (hover, rowIsSelected ? 1.0f : 0.0f);
-        g.setColour (ui::blend (ui::border, ui::accent, focus).withAlpha (0.88f));
-        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 6.0f, 1.0f);
+        g.setColour (rowIsSelected ? ui::accent.withAlpha (0.84f)
+                                   : ui::blend (ui::border, ui::gray, hover).withAlpha (0.78f));
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 5.0f, 0.8f);
     }
 
     auto categoryArea = bounds.removeFromRight (130);
@@ -221,8 +222,8 @@ void PluginBrowserComponent::paintListBoxItem (int rowNumber, juce::Graphics& g,
     g.setColour (rowIsSelected ? ui::accent.withAlpha (0.10f) : ui::control);
     g.fillRoundedRectangle (categoryBounds, 5.0f);
     g.setColour (rowIsSelected ? ui::accent.withAlpha (0.82f)
-                               : ui::blend (ui::border, ui::accent, hover * 0.65f));
-    g.drawRoundedRectangle (categoryBounds.reduced (0.5f), 5.0f, 1.0f);
+                               : ui::blend (ui::border, ui::gray, hover * 0.72f));
+    g.drawRoundedRectangle (categoryBounds.reduced (0.5f), 5.0f, 0.8f);
     g.setColour (rowIsSelected ? ui::accent : ui::textMuted);
     g.setFont (ui::font (8.8f, juce::Font::bold));
     g.drawFittedText (gr::normalizedPluginCategoryName (plugin), categoryArea.reduced (10, 7),
@@ -252,7 +253,7 @@ void PluginBrowserComponent::paintCategoryItem (int rowNumber, juce::Graphics& g
     auto bounds = juce::Rectangle<int> (0, 0, width, height).reduced (5, 2);
 
     auto fill = ui::workspace;
-    fill = ui::blend (fill, ui::canvas, hover * 0.48f);
+    fill = ui::blend (fill, ui::controlHigh, hover * 0.64f);
     if (rowIsSelected)
         fill = ui::blend (fill, ui::accent, 0.075f);
 
@@ -260,9 +261,9 @@ void PluginBrowserComponent::paintCategoryItem (int rowNumber, juce::Graphics& g
     {
         g.setColour (fill);
         g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
-        const auto focus = juce::jmax (hover, rowIsSelected ? 1.0f : 0.0f);
-        g.setColour (ui::blend (ui::border, ui::accent, focus).withAlpha (0.88f));
-        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 5.0f, 1.0f);
+        g.setColour (rowIsSelected ? ui::accent.withAlpha (0.84f)
+                                   : ui::blend (ui::border, ui::gray, hover).withAlpha (0.78f));
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 5.0f, 0.8f);
     }
 
     auto countArea = bounds.removeFromRight (42);
@@ -274,7 +275,7 @@ void PluginBrowserComponent::paintCategoryItem (int rowNumber, juce::Graphics& g
     chevron.startNewSubPath (cx - 2.5f, cy - 4.0f);
     chevron.lineTo (cx + 2.5f, cy);
     chevron.lineTo (cx - 2.5f, cy + 4.0f);
-    g.setColour (rowIsSelected ? ui::accent : ui::blend (ui::gray, ui::accent, hover));
+    g.setColour (rowIsSelected ? ui::accent : ui::blend (ui::textMuted, ui::gray, hover));
     g.strokePath (chevron, juce::PathStrokeType (1.2f));
 
     g.setColour (rowIsSelected ? ui::accent : ui::text);
@@ -368,7 +369,7 @@ void PluginBrowserComponent::updateHoverAnimation()
     searchHoverAmount = approachHover (searchHoverAmount, searchTarget);
     if (std::abs (oldSearch - searchHoverAmount) > 0.001f)
         searchBox.setColour (juce::TextEditor::outlineColourId,
-                             ui::blend (ui::border, ui::accent, searchHoverAmount));
+                             ui::blend (ui::border, ui::gray, searchHoverAmount * 0.72f));
 
     if (categoryChanged) categoryList.repaint();
     if (resultChanged) resultList.repaint();
@@ -647,19 +648,21 @@ int PluginBrowserComponent::getBlacklistedCount() const
 void PluginBrowserComponent::showPathsMenu()
 {
     juce::PopupMenu menu;
+    menu.setLookAndFeel (&ui::themeLookAndFeel());
     menu.addItem (1, "ADD FOLDER...");
     menu.addItem (2, "RESET DEFAULTS");
     menu.addItem (3, "RETRY FAILED PLUGINS", getBlacklistedCount() > 0);
     if (! searchPaths.isEmpty())
     {
         juce::PopupMenu removeMenu;
+        removeMenu.setLookAndFeel (&ui::themeLookAndFeel());
         for (int i = 0; i < searchPaths.size(); ++i) removeMenu.addItem (1000 + i, searchPaths[i]);
         menu.addSeparator();
         menu.addSubMenu ("REMOVE PATH", removeMenu);
     }
 
     juce::Component::SafePointer<PluginBrowserComponent> safe (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pathsButton),
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pathsButton).withStandardItemHeight (27),
                         [safe] (int result)
                         {
                             if (safe == nullptr || result == 0) return;
@@ -768,7 +771,7 @@ void PluginBrowserComponent::paint (juce::Graphics& g)
 
     ui::drawSectionTitle (g, "PLUGINS", { 16, 12, 110, 22 });
     g.setColour (ui::textMuted);
-    g.setFont (ui::font (9.0f, juce::Font::bold));
+    g.setFont (ui::font (9.0f, juce::Font::bold, 0.04f));
     g.drawText ("SLOT 0" + juce::String (targetSlot + 1) + "  ·  ISOLATED SCANNER  ·  AUTO CATEGORY",
                 126, 12, getWidth() - 144, 22, juce::Justification::centredLeft);
 
