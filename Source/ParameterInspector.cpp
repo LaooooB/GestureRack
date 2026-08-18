@@ -165,7 +165,10 @@ bool bindingStateEqual (const GestureBinding& a, const GestureBinding& b)
         && std::abs (a.maxValue - b.maxValue) < 0.00001f
         && std::abs (a.smoothingMs - b.smoothingMs) < 0.0001f
         && std::abs (a.deadband - b.deadband) < 0.00001f
+        && a.sourceAxis == b.sourceAxis
+        && a.curveType == b.curveType
         && std::abs (a.curve - b.curve) < 0.00001f
+        && std::abs (a.sensitivity - b.sensitivity) < 0.00001f
         && a.inverted == b.inverted
         && a.enabled == b.enabled;
 }
@@ -181,6 +184,13 @@ bool mappingSnapshotsDiffer (const std::vector<GestureBinding>& a,
 
 int modeToComboId (MappingMode mode) { return static_cast<int> (mode) + 1; }
 MappingMode comboIdToMode (int id) { return static_cast<MappingMode> (juce::jmax (1, id) - 1); }
+int axisToComboId (MappingAxis axis) { return static_cast<int> (axis) + 1; }
+MappingAxis comboIdToAxis (int id) { return static_cast<MappingAxis> (juce::jlimit (1, 2, id) - 1); }
+int curveToComboId (MappingCurveType curve) { return static_cast<int> (curve) + 1; }
+MappingCurveType comboIdToCurve (int id)
+{
+    return static_cast<MappingCurveType> (juce::jlimit (1, 6, id) - 1);
+}
 }
 
 class ParameterInspector::MappingSnapshotAction final : public juce::UndoableAction
@@ -221,6 +231,101 @@ private:
     std::vector<GestureBinding> before;
     std::vector<GestureBinding> after;
     bool firstPerform = true;
+};
+
+class ParameterInspector::CurvePreview final : public juce::Component
+{
+public:
+    CurvePreview() { setInterceptsMouseClicks (false, false); }
+
+    void setResponse (MappingAxis newAxis, MappingCurveType newType, float newAmount,
+                      float newSensitivity, bool newInverted, bool newEnabled)
+    {
+        axis = newAxis;
+        type = newType;
+        amount = juce::jlimit (0.0f, 1.0f, newAmount);
+        sensitivity = juce::jlimit (0.25f, 8.0f, newSensitivity);
+        inverted = newInverted;
+        hasMapping = newEnabled;
+        repaint();
+    }
+
+    void clearResponse()
+    {
+        hasMapping = false;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (ui::panelLow);
+        g.fillRoundedRectangle (bounds, 7.0f);
+        g.setColour (ui::border.withAlpha (0.78f));
+        g.drawRoundedRectangle (bounds, 7.0f, 0.8f);
+
+        auto inner = getLocalBounds().reduced (10);
+        auto header = inner.removeFromTop (18);
+        g.setFont (ui::metaFont());
+        g.setColour (hasMapping ? ui::text : ui::textMuted);
+        g.drawFittedText (hasMapping
+                            ? (axis == MappingAxis::horizontal ? "X RESPONSE" : "Y RESPONSE")
+                            : "RESPONSE",
+                          header.removeFromLeft (juce::jmax (60, header.getWidth() / 2)),
+                          juce::Justification::centredLeft, 1);
+        if (hasMapping)
+        {
+            g.setColour (ui::accent);
+            g.drawFittedText (juce::String (sensitivity, 2) + "x", header,
+                              juce::Justification::centredRight, 1);
+        }
+
+        auto graph = inner.toFloat().reduced (2.0f, 5.0f);
+        if (graph.getWidth() < 10.0f || graph.getHeight() < 10.0f) return;
+
+        g.setColour (ui::border.withAlpha (0.30f));
+        g.drawLine (graph.getX(), graph.getCentreY(), graph.getRight(), graph.getCentreY(), 0.7f);
+        g.drawLine (graph.getCentreX(), graph.getY(), graph.getCentreX(), graph.getBottom(), 0.7f);
+        g.setColour (ui::textMuted.withAlpha (0.20f));
+        g.drawLine (graph.getX(), graph.getBottom(), graph.getRight(), graph.getY(), 0.7f);
+
+        if (! hasMapping) return;
+
+        juce::Path path;
+        constexpr int samples = 72;
+        for (int i = 0; i < samples; ++i)
+        {
+            const auto input = static_cast<float> (i) / static_cast<float> (samples - 1);
+            auto source = inverted ? 1.0f - input : input;
+            source = applyMotionSensitivity (source, sensitivity);
+            const auto output = applyMappingCurve (source, type, amount);
+            const auto x = juce::jmap (input, 0.0f, 1.0f, graph.getX(), graph.getRight());
+            const auto y = juce::jmap (output, 0.0f, 1.0f, graph.getBottom(), graph.getY());
+            if (i == 0) path.startNewSubPath (x, y);
+            else path.lineTo (x, y);
+        }
+
+        g.setColour (ui::accent.withAlpha (0.94f));
+        g.strokePath (path, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+
+        auto midpoint = 0.5f;
+        auto midSource = inverted ? 1.0f - midpoint : midpoint;
+        midSource = applyMotionSensitivity (midSource, sensitivity);
+        const auto midOutput = applyMappingCurve (midSource, type, amount);
+        const auto mx = juce::jmap (midpoint, 0.0f, 1.0f, graph.getX(), graph.getRight());
+        const auto my = juce::jmap (midOutput, 0.0f, 1.0f, graph.getBottom(), graph.getY());
+        g.setColour (ui::accent);
+        g.fillEllipse (mx - 3.0f, my - 3.0f, 6.0f, 6.0f);
+    }
+
+private:
+    MappingAxis axis = MappingAxis::vertical;
+    MappingCurveType type = MappingCurveType::linear;
+    float amount = 1.0f;
+    float sensitivity = 1.0f;
+    bool inverted = false;
+    bool hasMapping = false;
 };
 
 class ParameterInspector::ParameterListModel final : public juce::ListBoxModel
@@ -551,7 +656,20 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
         repaint();
     };
 
-    addAndMakeVisible (behaviorBox);
+    const auto configureCombo = [] (juce::ComboBox& box)
+    {
+        box.setColour (juce::ComboBox::backgroundColourId, ui::control);
+        box.setColour (juce::ComboBox::textColourId, ui::text);
+        box.setColour (juce::ComboBox::outlineColourId, ui::border);
+        box.setColour (juce::ComboBox::arrowColourId, ui::textMuted);
+    };
+
+    for (auto* box : { &behaviorBox, &axisBox, &curveTypeBox })
+    {
+        addAndMakeVisible (*box);
+        configureCombo (*box);
+    }
+
     behaviorBox.addItem ("CONTINUOUS", modeToComboId (MappingMode::absoluteHeight));
     behaviorBox.addItem ("TOGGLE", modeToComboId (MappingMode::toggleParameter));
     behaviorBox.addItem ("MOMENTARY", modeToComboId (MappingMode::momentaryParameter));
@@ -559,10 +677,16 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     behaviorBox.addItem ("STEP +", modeToComboId (MappingMode::stepUpParameter));
     behaviorBox.addItem ("STEP -", modeToComboId (MappingMode::stepDownParameter));
     behaviorBox.addItem ("TRIGGER", modeToComboId (MappingMode::triggerParameter));
-    behaviorBox.setColour (juce::ComboBox::backgroundColourId, ui::control);
-    behaviorBox.setColour (juce::ComboBox::textColourId, ui::text);
-    behaviorBox.setColour (juce::ComboBox::outlineColourId, ui::border);
-    behaviorBox.setColour (juce::ComboBox::arrowColourId, ui::textMuted);
+
+    axisBox.addItem ("VERTICAL Y", axisToComboId (MappingAxis::vertical));
+    axisBox.addItem ("HORIZONTAL X", axisToComboId (MappingAxis::horizontal));
+
+    curveTypeBox.addItem ("LINEAR", curveToComboId (MappingCurveType::linear));
+    curveTypeBox.addItem ("EASE IN", curveToComboId (MappingCurveType::easeIn));
+    curveTypeBox.addItem ("EASE OUT", curveToComboId (MappingCurveType::easeOut));
+    curveTypeBox.addItem ("S CURVE", curveToComboId (MappingCurveType::sCurve));
+    curveTypeBox.addItem ("EXPONENTIAL", curveToComboId (MappingCurveType::exponential));
+    curveTypeBox.addItem ("LOGARITHMIC", curveToComboId (MappingCurveType::logarithmic));
 
     auto configureSlider = [] (juce::Slider& slider, double min, double max, double step)
     {
@@ -577,12 +701,14 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     };
     configureSlider (minSlider, 0.0, 1.0, 0.001);
     configureSlider (maxSlider, 0.0, 1.0, 0.001);
-    configureSlider (curveSlider, -1.0, 1.0, 0.01);
+    configureSlider (curveSlider, 0.0, 1.0, 0.01);
+    configureSlider (sensitivitySlider, 0.25, 8.0, 0.05);
     configureSlider (smoothingSlider, 0.0, 5000.0, 1.0);
     configureSlider (deadbandSlider, 0.0, 0.25, 0.001);
+    sensitivitySlider.setTextValueSuffix (" x");
     smoothingSlider.setTextValueSuffix (" ms");
 
-    for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &smoothingSlider, &deadbandSlider })
+    for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &sensitivitySlider, &smoothingSlider, &deadbandSlider })
         addAndMakeVisible (*slider);
     for (auto* toggle : { &invertButton, &mappingEnabledButton })
     {
@@ -594,6 +720,9 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
     for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton })
         addAndMakeVisible (*button);
 
+    curvePreview = std::make_unique<CurvePreview>();
+    addAndMakeVisible (*curvePreview);
+
     addAndMakeVisible (statusLabel);
     statusLabel.setColour (juce::Label::textColourId, ui::textMuted);
     statusLabel.setFont (ui::metaFont());
@@ -604,9 +733,12 @@ ParameterInspector::ParameterInspector (GestureRackAudioProcessor& processorToUs
         if (! loadingControls) applySelectedMappingControls();
     };
     behaviorBox.onChange = autoApply;
+    axisBox.onChange = autoApply;
+    curveTypeBox.onChange = autoApply;
     minSlider.onValueChange = autoApply;
     maxSlider.onValueChange = autoApply;
     curveSlider.onValueChange = autoApply;
+    sensitivitySlider.onValueChange = autoApply;
     smoothingSlider.onValueChange = autoApply;
     deadbandSlider.onValueChange = autoApply;
     invertButton.onClick = autoApply;
@@ -905,6 +1037,7 @@ void ParameterInspector::refreshData (bool forceRebuild)
         mappingList.selectRow (selectedMappingRow, false, true);
     statusLabel.setText (processor.getMappingStatus(), juce::dontSendNotification);
     updateControlEnablement();
+    updateCurvePreview();
 }
 
 void ParameterInspector::parameterSelectionChanged (int row)
@@ -933,9 +1066,12 @@ void ParameterInspector::loadSelectedMappingControls()
     {
         const auto& binding = mappings[static_cast<size_t> (selectedMappingRow)];
         behaviorBox.setSelectedId (modeToComboId (binding.mode), juce::dontSendNotification);
+        axisBox.setSelectedId (axisToComboId (binding.sourceAxis), juce::dontSendNotification);
+        curveTypeBox.setSelectedId (curveToComboId (binding.curveType), juce::dontSendNotification);
         minSlider.setValue (binding.minValue, juce::dontSendNotification);
         maxSlider.setValue (binding.maxValue, juce::dontSendNotification);
         curveSlider.setValue (binding.curve, juce::dontSendNotification);
+        sensitivitySlider.setValue (binding.sensitivity, juce::dontSendNotification);
         smoothingSlider.setValue (binding.smoothingMs, juce::dontSendNotification);
         deadbandSlider.setValue (binding.deadband, juce::dontSendNotification);
         invertButton.setToggleState (binding.inverted, juce::dontSendNotification);
@@ -943,6 +1079,7 @@ void ParameterInspector::loadSelectedMappingControls()
     }
     loadingControls = false;
     updateControlEnablement();
+    updateCurvePreview();
     repaint();
 }
 
@@ -960,9 +1097,12 @@ void ParameterInspector::applySelectedMappingControls()
         auto maxValue = static_cast<float> (maxSlider.getValue());
         if (minValue > maxValue) std::swap (minValue, maxValue);
         binding.mode = comboIdToMode (behaviorBox.getSelectedId());
+        binding.sourceAxis = comboIdToAxis (axisBox.getSelectedId());
+        binding.curveType = comboIdToCurve (curveTypeBox.getSelectedId());
         binding.minValue = minValue;
         binding.maxValue = maxValue;
         binding.curve = static_cast<float> (curveSlider.getValue());
+        binding.sensitivity = static_cast<float> (sensitivitySlider.getValue());
         binding.smoothingMs = static_cast<float> (smoothingSlider.getValue());
         binding.deadband = static_cast<float> (deadbandSlider.getValue());
         binding.inverted = invertButton.getToggleState();
@@ -979,8 +1119,25 @@ void ParameterInspector::applySelectedMappingControls()
     pushMappingSnapshot (slot, before, after, "Edit mapping");
     statusLabel.setText ("MAPPING UPDATED", juce::dontSendNotification);
     updateControlEnablement();
+    updateCurvePreview();
     parameterList.repaint();
+    mappingList.repaint();
     repaint();
+}
+
+void ParameterInspector::updateCurvePreview()
+{
+    if (curvePreview == nullptr) return;
+    if (! juce::isPositiveAndBelow (selectedMappingRow, static_cast<int> (mappings.size())))
+    {
+        curvePreview->clearResponse();
+        return;
+    }
+    const auto& binding = mappings[static_cast<size_t> (selectedMappingRow)];
+    const auto continuous = binding.targetType == MappingTargetType::childParameter
+                         && binding.mode == MappingMode::absoluteHeight;
+    curvePreview->setResponse (binding.sourceAxis, binding.curveType, binding.curve,
+                               binding.sensitivity, binding.inverted, continuous && binding.enabled);
 }
 
 void ParameterInspector::updateControlEnablement()
@@ -989,9 +1146,12 @@ void ParameterInspector::updateControlEnablement()
     const auto child = mappingSelected && mappings[static_cast<size_t> (selectedMappingRow)].targetType == MappingTargetType::childParameter;
     const auto continuous = child && mappings[static_cast<size_t> (selectedMappingRow)].mode == MappingMode::absoluteHeight;
     behaviorBox.setEnabled (child);
+    axisBox.setEnabled (continuous);
+    curveTypeBox.setEnabled (continuous);
     minSlider.setEnabled (child);
     maxSlider.setEnabled (child);
     curveSlider.setEnabled (continuous);
+    sensitivitySlider.setEnabled (continuous);
     smoothingSlider.setEnabled (continuous);
     deadbandSlider.setEnabled (continuous);
     invertButton.setEnabled (continuous);
@@ -999,16 +1159,19 @@ void ParameterInspector::updateControlEnablement()
     smoothPresetButton.setEnabled (continuous);
     mappingEnabledButton.setEnabled (mappingSelected);
     removeMappingButton.setEnabled (mappingSelected);
+    if (curvePreview != nullptr) curvePreview->setEnabled (continuous);
 }
 
 void ParameterInspector::updateAdvancedVisibility()
 {
     mappingList.setVisible (advancedExpanded);
-    behaviorBox.setVisible (advancedExpanded);
-    for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &smoothingSlider, &deadbandSlider }) slider->setVisible (advancedExpanded);
+    for (auto* box : { &behaviorBox, &axisBox, &curveTypeBox }) box->setVisible (advancedExpanded);
+    for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &sensitivitySlider, &smoothingSlider, &deadbandSlider })
+        slider->setVisible (advancedExpanded);
     for (auto* toggle : { &invertButton, &mappingEnabledButton }) toggle->setVisible (advancedExpanded);
     for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton }) button->setVisible (advancedExpanded);
     statusLabel.setVisible (advancedExpanded);
+    if (curvePreview != nullptr) curvePreview->setVisible (advancedExpanded);
     moreButton.setToggleState (advancedExpanded, juce::dontSendNotification);
 }
 
@@ -1026,7 +1189,13 @@ juce::String ParameterInspector::describeBinding (const GestureBinding& binding)
     {
         result += "  [" + mappingModeToString (binding.mode) + "]";
         if (binding.mode == MappingMode::absoluteHeight)
+        {
             result += "  " + juce::String (binding.minValue * 100.0f, 0) + "-" + juce::String (binding.maxValue * 100.0f, 0) + "%";
+            result += binding.sourceAxis == MappingAxis::horizontal ? "  X" : "  Y";
+            result += "  " + mappingCurveTypeToString (binding.curveType).toUpperCase();
+            if (std::abs (binding.sensitivity - 1.0f) > 0.001f)
+                result += "  " + juce::String (binding.sensitivity, 2) + "x";
+        }
         if (binding.inverted) result += "  INV";
     }
     if (! binding.enabled) result += "  OFF";
@@ -1095,16 +1264,22 @@ void ParameterInspector::paint (juce::Graphics& g)
         if (! mappingList.getBounds().isEmpty())
             g.drawText ("ASSIGNED", mappingList.getX(), mappingList.getY() - 16,
                         mappingList.getWidth(), 14, juce::Justification::centredLeft);
-        if (! behaviorBox.getBounds().isEmpty())
+
+        const auto drawControlLabel = [&] (const juce::String& label, const juce::Component& component)
         {
-            const auto labelY = behaviorBox.getY() - 15;
-            g.drawText ("BEHAVIOR", behaviorBox.getX(), labelY, behaviorBox.getWidth(), 14, juce::Justification::centredLeft);
-            g.drawText ("MIN", minSlider.getX(), labelY, minSlider.getWidth(), 14, juce::Justification::centredLeft);
-            g.drawText ("MAX", maxSlider.getX(), labelY, maxSlider.getWidth(), 14, juce::Justification::centredLeft);
-            g.drawText ("CURVE", curveSlider.getX(), labelY, curveSlider.getWidth(), 14, juce::Justification::centredLeft);
-            g.drawText ("SMOOTH", smoothingSlider.getX(), labelY, smoothingSlider.getWidth(), 14, juce::Justification::centredLeft);
-            g.drawText ("DEAD", deadbandSlider.getX(), labelY, deadbandSlider.getWidth(), 14, juce::Justification::centredLeft);
-        }
+            if (component.getBounds().isEmpty()) return;
+            g.drawText (label, component.getX(), component.getY() - 15,
+                        component.getWidth(), 14, juce::Justification::centredLeft);
+        };
+        drawControlLabel ("BEHAVIOR", behaviorBox);
+        drawControlLabel ("AXIS", axisBox);
+        drawControlLabel ("CURVE", curveTypeBox);
+        drawControlLabel ("SENSITIVITY", sensitivitySlider);
+        drawControlLabel ("MIN", minSlider);
+        drawControlLabel ("MAX", maxSlider);
+        drawControlLabel ("AMOUNT", curveSlider);
+        drawControlLabel ("SMOOTH", smoothingSlider);
+        drawControlLabel ("JITTER", deadbandSlider);
     }
 }
 
@@ -1123,7 +1298,7 @@ void ParameterInspector::resized()
     juce::Rectangle<int> advancedArea;
     if (advancedExpanded)
     {
-        advancedArea = bounds.removeFromBottom (160);
+        advancedArea = bounds.removeFromBottom (226);
         bounds.removeFromBottom (10);
     }
 
@@ -1136,31 +1311,49 @@ void ParameterInspector::resized()
     {
         mappingList.setBounds ({});
         behaviorBox.setBounds ({});
-        for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &smoothingSlider, &deadbandSlider }) slider->setBounds ({});
+        axisBox.setBounds ({});
+        curveTypeBox.setBounds ({});
+        for (auto* slider : { &minSlider, &maxSlider, &curveSlider, &sensitivitySlider, &smoothingSlider, &deadbandSlider })
+            slider->setBounds ({});
         for (auto* toggle : { &invertButton, &mappingEnabledButton }) toggle->setBounds ({});
         for (auto* button : { &removeMappingButton, &livePresetButton, &smoothPresetButton }) button->setBounds ({});
+        if (curvePreview != nullptr) curvePreview->setBounds ({});
         statusLabel.setBounds ({});
         return;
     }
 
-    auto left = advancedArea.removeFromLeft (juce::jmax (240, advancedArea.getWidth() * 34 / 100));
-    mappingList.setBounds (left.withTrimmedTop (18).withTrimmedBottom (22));
+    auto left = advancedArea.removeFromLeft (juce::jmax (235, advancedArea.getWidth() * 30 / 100));
     auto status = left.removeFromBottom (18);
     statusLabel.setBounds (status);
+    mappingList.setBounds (left.withTrimmedTop (18).withTrimmedBottom (4));
+
     advancedArea.removeFromLeft (10);
     advancedArea.removeFromTop (18);
 
-    auto sliders = advancedArea.removeFromTop (52);
-    constexpr int gap = 5;
-    const auto width = juce::jmax (66, (sliders.getWidth() - gap * 5) / 6);
-    behaviorBox.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
-    minSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
-    maxSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
-    curveSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
-    smoothingSlider.setBounds (sliders.removeFromLeft (width)); sliders.removeFromLeft (gap);
-    deadbandSlider.setBounds (sliders);
+    const auto previewWidth = juce::jlimit (118, 150, advancedArea.getWidth() / 4);
+    auto previewColumn = advancedArea.removeFromRight (previewWidth);
+    if (curvePreview != nullptr)
+        curvePreview->setBounds (previewColumn.removeFromTop (132));
+    advancedArea.removeFromRight (8);
 
-    advancedArea.removeFromTop (18);
+    constexpr int gap = 6;
+    auto row1 = advancedArea.removeFromTop (52);
+    const auto row1Width = juce::jmax (70, (row1.getWidth() - gap * 3) / 4);
+    behaviorBox.setBounds (row1.removeFromLeft (row1Width)); row1.removeFromLeft (gap);
+    axisBox.setBounds (row1.removeFromLeft (row1Width)); row1.removeFromLeft (gap);
+    curveTypeBox.setBounds (row1.removeFromLeft (row1Width)); row1.removeFromLeft (gap);
+    sensitivitySlider.setBounds (row1);
+
+    advancedArea.removeFromTop (20);
+    auto row2 = advancedArea.removeFromTop (52);
+    const auto row2Width = juce::jmax (62, (row2.getWidth() - gap * 4) / 5);
+    minSlider.setBounds (row2.removeFromLeft (row2Width)); row2.removeFromLeft (gap);
+    maxSlider.setBounds (row2.removeFromLeft (row2Width)); row2.removeFromLeft (gap);
+    curveSlider.setBounds (row2.removeFromLeft (row2Width)); row2.removeFromLeft (gap);
+    smoothingSlider.setBounds (row2.removeFromLeft (row2Width)); row2.removeFromLeft (gap);
+    deadbandSlider.setBounds (row2);
+
+    advancedArea.removeFromTop (16);
     auto actions = advancedArea.removeFromTop (30);
     livePresetButton.setBounds (actions.removeFromLeft (86)); actions.removeFromLeft (5);
     smoothPresetButton.setBounds (actions.removeFromLeft (100)); actions.removeFromLeft (8);
