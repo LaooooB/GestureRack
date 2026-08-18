@@ -26,6 +26,27 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
 
+    void visibilityChanged() override
+    {
+        if (! isVisible())
+            return;
+
+        // The browser is created after the editor's initial setSize(), so some
+        // hosts never give it bounds until the user manually resizes the plug-in
+        // window. Re-run the parent layout at the moment the browser becomes
+        // visible so the first click always produces a usable overlay.
+        if (auto* parent = getParentComponent())
+        {
+            parent->resized();
+
+            // Defensive fallback for unusual hosts/components that defer their
+            // layout callback. Normal GestureRack layout replaces this with the
+            // exact workspace bounds immediately.
+            if (getWidth() < 32 || getHeight() < 32)
+                setBounds (parent->getLocalBounds().reduced (10));
+        }
+    }
+
 private:
     class ScanThread;
     class CategoryListModel;
