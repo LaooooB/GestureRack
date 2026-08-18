@@ -41,8 +41,10 @@ inline int upperRowHeightFor (int workspaceHeight, int desiredNativeHeight)
     return juce::jlimit (minimumUpperHeight, maxUpper, juce::jmax (proportional, desired));
 }
 
-constexpr float panelRadius = 11.0f;
-constexpr float controlRadius = 7.0f;
-constexpr float cardRadius = 8.0f;
-constexpr float borderThickness = 1.0f;
+// PRISIM theme geometry. Layout proportions deliberately stay unchanged; only the
+// surface language is tightened to the softer 9/5/6 px package/control/card rhythm.
+constexpr float panelRadius = 9.0f;
+constexpr float controlRadius = 5.0f;
+constexpr float cardRadius = 6.0f;
+constexpr float borderThickness = 0.8f;
 }
