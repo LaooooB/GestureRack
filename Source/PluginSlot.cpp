@@ -3,6 +3,23 @@
 
 namespace gr
 {
+namespace
+{
+bool sameParameterTarget (const GestureBinding& a, const GestureBinding& b)
+{
+    if (a.targetType != MappingTargetType::childParameter
+        || b.targetType != MappingTargetType::childParameter)
+        return false;
+
+    if (a.parameterStableId.isNotEmpty() && b.parameterStableId.isNotEmpty())
+        return a.parameterStableId == b.parameterStableId;
+
+    return a.parameterIndexFallback >= 0
+        && a.parameterIndexFallback == b.parameterIndexFallback
+        && a.parameterName == b.parameterName;
+}
+}
+
 PluginSlot::PluginSlot (int indexToUse) noexcept
     : slotIndex (indexToUse)
 {
@@ -46,21 +63,46 @@ std::vector<GestureBinding> PluginSlot::getMappings() const
 void PluginSlot::addMapping (const GestureBinding& binding)
 {
     const juce::SpinLock::ScopedLockType lock (mappingsLock);
+
+    // A parameter has exactly one gesture owner. A gesture may still fan out to
+    // any number of different parameters. Replacing the gesture on an already
+    // mapped parameter therefore removes only that parameter's previous binding;
+    // sibling parameters driven by the same gesture are untouched.
+    std::erase_if (mappings, [&binding] (const GestureBinding& existing)
+    {
+        return existing.id == binding.id || sameParameterTarget (existing, binding);
+    });
+
     mappings.push_back (binding);
 }
 
 bool PluginSlot::updateMapping (const GestureBinding& binding)
 {
     const juce::SpinLock::ScopedLockType lock (mappingsLock);
-    for (auto& existing : mappings)
+
+    const auto original = std::find_if (mappings.begin(), mappings.end(), [&binding] (const GestureBinding& existing)
     {
-        if (existing.id == binding.id)
-        {
-            existing = binding;
-            return true;
-        }
-    }
-    return false;
+        return existing.id == binding.id;
+    });
+    if (original == mappings.end())
+        return false;
+
+    // Keep the one-parameter/one-gesture invariant even when mappings are
+    // restored through undo/state migration or edited by future UI code.
+    std::erase_if (mappings, [&binding] (const GestureBinding& existing)
+    {
+        return existing.id != binding.id && sameParameterTarget (existing, binding);
+    });
+
+    const auto target = std::find_if (mappings.begin(), mappings.end(), [&binding] (const GestureBinding& existing)
+    {
+        return existing.id == binding.id;
+    });
+    if (target == mappings.end())
+        return false;
+
+    *target = binding;
+    return true;
 }
 
 bool PluginSlot::removeMapping (const juce::Uuid& id)
