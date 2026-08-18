@@ -96,6 +96,7 @@ private:
     class ParameterListModel;
     class MappingListModel;
     class MappingSnapshotAction;
+    class CurvePreview;
 
     void timerCallback() override;
     void refreshData (bool forceRebuild);
@@ -105,6 +106,7 @@ private:
     void applySelectedMappingControls();
     void updateControlEnablement();
     void updateAdvancedVisibility();
+    void updateCurvePreview();
     void setHoveredMapping (juce::String mappingId);
 
     void removeMappingAt (int mappingIndex, const juce::String& reason);
@@ -129,9 +131,12 @@ private:
     ui::IconButton moreButton { ui::Icon::more, "Mapping options" };
 
     ThemeComboBox behaviorBox;
+    ThemeComboBox axisBox;
+    ThemeComboBox curveTypeBox;
     juce::Slider minSlider;
     juce::Slider maxSlider;
     juce::Slider curveSlider;
+    juce::Slider sensitivitySlider;
     juce::Slider smoothingSlider;
     juce::Slider deadbandSlider;
     juce::ToggleButton invertButton { "INVERT" };
@@ -140,6 +145,7 @@ private:
     ui::AnimatedTextButton livePresetButton { "LIVE 25ms" };
     ui::AnimatedTextButton smoothPresetButton { "SMOOTH 80ms" };
     juce::Label statusLabel;
+    std::unique_ptr<CurvePreview> curvePreview;
 
     std::vector<ParameterDescriptor> parameters;
     std::vector<GestureBinding> mappings;
