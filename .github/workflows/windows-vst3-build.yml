@@ -66,8 +66,8 @@ jobs:
       - name: Configure JUCE project
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF
 
-      - name: Build GestureRack VST3 and isolated scanner
-        run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+      - name: Build GestureRack VST3, Standalone and isolated scanner
+        run: cmake --build build --config Release --target GestureRack_VST3 GestureRack_Standalone --parallel 2
 
       - name: Stage Windows package
         shell: pwsh
@@ -106,6 +106,22 @@ jobs:
             "$scannerHash  VST3/Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe"
           ) | Set-Content -Encoding ASCII "$package/SHA256SUMS.txt"
 
+      - name: Stage standalone
+        shell: pwsh
+        run: |
+          $standalone = "release/GestureRack-Windows-Standalone"
+          New-Item -ItemType Directory -Force $standalone | Out-Null
+          Copy-Item -Force "build/GestureRack_artefacts/Release/Standalone/Gesture Rack.exe" "$standalone/Gesture Rack.exe"
+          Copy-Item -Force "build/GestureRack_artefacts/Release/Standalone/GestureRackScanner.exe" "$standalone/GestureRackScanner.exe"
+          if (-not (Test-Path "$standalone/Gesture Rack.exe")) { throw "Gesture Rack standalone EXE missing" }
+          if (-not (Test-Path "$standalone/GestureRackScanner.exe")) { throw "GestureRackScanner missing beside standalone" }
+          $appHash = (Get-FileHash "$standalone/Gesture Rack.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $scannerHash = (Get-FileHash "$standalone/GestureRackScanner.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$appHash  Gesture Rack.exe",
+            "$scannerHash  GestureRackScanner.exe"
+          ) | Set-Content -Encoding ASCII "$standalone/SHA256SUMS.txt"
+
       - name: Upload complete Windows package
         uses: actions/upload-artifact@v4
         with:
@@ -119,5 +135,13 @@ jobs:
         with:
           name: GestureRack-Windows-VST3
           path: build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Gesture Rack Standalone
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestureRack-Windows-Standalone
+          path: release/GestureRack-Windows-Standalone/
           if-no-files-found: error
           retention-days: 30
