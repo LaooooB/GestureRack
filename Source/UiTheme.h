@@ -267,8 +267,8 @@ public:
     {
         setColour (juce::TextButton::buttonColourId, control);
         setColour (juce::TextButton::buttonOnColourId, control);
-        setColour (juce::TextButton::textColourOffId, text);
-        setColour (juce::TextButton::textColourOnId, text);
+        setColour (juce::TextButton::textColourOffId, gr::ui::text);
+        setColour (juce::TextButton::textColourOnId, gr::ui::text);
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     }
 
@@ -301,7 +301,7 @@ public:
         g.setColour (isEnabled() ? (selected ? accent : blend (border, accent, hoverAmount * 0.8f))
                                  : border.withAlpha (0.45f));
         g.drawRoundedRectangle (b, metrics::controlRadius, 1.0f);
-        g.setColour (isEnabled() ? (selected ? accent : text) : textMuted.withAlpha (0.55f));
+        g.setColour (isEnabled() ? (selected ? accent : gr::ui::text) : textMuted.withAlpha (0.55f));
         g.setFont (controlFont());
         g.drawFittedText (getButtonText(), getLocalBounds().reduced (7, 2), juce::Justification::centred, 1);
     }
@@ -366,7 +366,7 @@ public:
         g.drawRoundedRectangle (b, metrics::controlRadius, 1.0f);
         auto iconBounds = b.reduced (juce::jmax (5.0f, juce::jmin (b.getWidth(), b.getHeight()) * 0.23f));
         drawIcon (g, icon, iconBounds,
-                  isEnabled() ? ((on && accentWhenOn) ? accent : text) : textMuted.withAlpha (0.45f));
+                  isEnabled() ? ((on && accentWhenOn) ? accent : gr::ui::text) : textMuted.withAlpha (0.45f));
     }
 
 private:
