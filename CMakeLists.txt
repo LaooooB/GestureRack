@@ -25,6 +25,74 @@ else()
     endif()
 endif()
 
+# PRISIM uses the hinted static Inter 4.1 TTFs from the official rsms/inter release.
+# Fetch the exact release archive at configure time, verify its checksum, and compile
+# only the four required faces into the plugin binary. Runtime never depends on an OS
+# font installation and therefore never silently falls back to Segoe UI/SF/Arial/etc.
+set(GESTURERACK_INTER_VERSION "4.1" CACHE STRING "Pinned Inter release used by the Gesture Rack UI")
+set(GESTURERACK_INTER_ARCHIVE_SHA256
+    "9883FDD4A49D4FB66BD8177BA6625EF9A64AA45899767DDE3D36AA425756B11E")
+set(GESTURERACK_INTER_CACHE_DIR "${CMAKE_BINARY_DIR}/_deps/gesturerack-inter-${GESTURERACK_INTER_VERSION}")
+set(GESTURERACK_INTER_ARCHIVE "${GESTURERACK_INTER_CACHE_DIR}/Inter-${GESTURERACK_INTER_VERSION}.zip")
+set(GESTURERACK_INTER_ROOT "${GESTURERACK_INTER_CACHE_DIR}/extracted")
+set(GESTURERACK_INTER_TTF_DIR "${GESTURERACK_INTER_ROOT}/extras/ttf")
+set(GESTURERACK_INTER_FONTS
+    "${GESTURERACK_INTER_TTF_DIR}/Inter-Regular.ttf"
+    "${GESTURERACK_INTER_TTF_DIR}/Inter-SemiBold.ttf"
+    "${GESTURERACK_INTER_TTF_DIR}/Inter-Bold.ttf"
+    "${GESTURERACK_INTER_TTF_DIR}/InterDisplay-ExtraBold.ttf")
+
+set(_gesturerack_inter_ready TRUE)
+foreach(_font IN LISTS GESTURERACK_INTER_FONTS)
+    if (NOT EXISTS "${_font}")
+        set(_gesturerack_inter_ready FALSE)
+    endif()
+endforeach()
+
+if (NOT _gesturerack_inter_ready)
+    file(MAKE_DIRECTORY "${GESTURERACK_INTER_CACHE_DIR}")
+
+    if (EXISTS "${GESTURERACK_INTER_ARCHIVE}")
+        file(SHA256 "${GESTURERACK_INTER_ARCHIVE}" _gesturerack_inter_existing_sha256)
+        if (NOT _gesturerack_inter_existing_sha256 STREQUAL GESTURERACK_INTER_ARCHIVE_SHA256)
+            message(STATUS "GestureRack: cached Inter archive checksum changed; downloading the pinned release again")
+            file(REMOVE "${GESTURERACK_INTER_ARCHIVE}")
+        endif()
+    endif()
+
+    if (NOT EXISTS "${GESTURERACK_INTER_ARCHIVE}")
+        message(STATUS "GestureRack: fetching pinned Inter ${GESTURERACK_INTER_VERSION} static TTFs")
+        file(DOWNLOAD
+            "https://github.com/rsms/inter/releases/download/v${GESTURERACK_INTER_VERSION}/Inter-${GESTURERACK_INTER_VERSION}.zip"
+            "${GESTURERACK_INTER_ARCHIVE}"
+            EXPECTED_HASH "SHA256=${GESTURERACK_INTER_ARCHIVE_SHA256}"
+            TLS_VERIFY ON
+            SHOW_PROGRESS
+            STATUS _gesturerack_inter_download_status)
+        list(GET _gesturerack_inter_download_status 0 _gesturerack_inter_download_code)
+        list(GET _gesturerack_inter_download_status 1 _gesturerack_inter_download_message)
+        if (NOT _gesturerack_inter_download_code EQUAL 0)
+            message(FATAL_ERROR
+                "GestureRack: failed to download pinned Inter ${GESTURERACK_INTER_VERSION}: "
+                "${_gesturerack_inter_download_message}")
+        endif()
+    endif()
+
+    file(REMOVE_RECURSE "${GESTURERACK_INTER_ROOT}")
+    file(MAKE_DIRECTORY "${GESTURERACK_INTER_ROOT}")
+    file(ARCHIVE_EXTRACT INPUT "${GESTURERACK_INTER_ARCHIVE}" DESTINATION "${GESTURERACK_INTER_ROOT}")
+endif()
+
+foreach(_font IN LISTS GESTURERACK_INTER_FONTS)
+    if (NOT EXISTS "${_font}")
+        message(FATAL_ERROR "GestureRack: required PRISIM font asset is missing after extraction: ${_font}")
+    endif()
+endforeach()
+
+juce_add_binary_data(GestureRackFonts
+    SOURCES
+        ${GESTURERACK_INTER_FONTS})
+
 if (APPLE)
     set(GESTURE_RACK_FORMATS VST3 AU Standalone)
 else()
@@ -96,6 +164,7 @@ target_compile_definitions(GestureRack
 
 target_link_libraries(GestureRack
     PRIVATE
+        GestureRackFonts
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
