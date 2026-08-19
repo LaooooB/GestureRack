@@ -1,0 +1,108 @@
+name: Apply Face Mosaic And Presets
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.ci/face-mosaic-preset-probe*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-face-mosaic-presets
+  cancel-in-progress: false
+
+jobs:
+  apply-verify-publish:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout main product state
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Checkout JUCE 8.0.15
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.15
+          path: JUCE
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: VisionEngine/requirements.txt
+
+      - name: Install vision build dependencies
+        run: python -m pip install --disable-pip-version-check -r VisionEngine/requirements.txt pyinstaller
+
+      - name: Apply production patch
+        run: python tools/apply_face_mosaic_presets.py
+
+      - name: Compile-check vision modules
+        working-directory: VisionEngine
+        run: python -m py_compile vision_engine.py face_mosaic.py test_face_mosaic.py
+
+      - name: Run vision regression suite
+        working-directory: VisionEngine
+        run: python -m unittest -v test_face_mosaic.py test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py test_landmark_features.py test_gesture_dataset.py test_tiny_landmark_classifier.py test_shadow_evaluator.py test_training_dataset_quality.py test_analyze_gesture_dataset.py test_gesture_event_metrics.py
+
+      - name: Download production MediaPipe gesture model
+        working-directory: VisionEngine
+        run: python -c "from pathlib import Path; from vision_engine import ensure_model; ensure_model(Path('models/gesture_recognizer.task'))"
+
+      - name: Build and smoke-test frozen VisionEngine
+        working-directory: VisionEngine
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm GestureVisionEngine.spec
+          & .\dist\GestureVisionEngine.exe --help
+
+      - name: Configure JUCE project
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF
+
+      - name: Build GestureRack VST3 and scanner
+        run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+
+      - name: Verify product invariants
+        shell: pwsh
+        run: |
+          $required = @(
+            'VisionEngine/face_mosaic.py',
+            'VisionEngine/test_face_mosaic.py',
+            'VisionEngine/vision_engine.py',
+            'Source/VisionReceiver.cpp',
+            'Source/PluginProcessor.cpp',
+            'Source/PluginEditor.cpp'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "Missing $path" }
+          }
+          if (-not (Select-String -Quiet -Path CMakeLists.txt -Pattern 'COMPANY_NAME "Lao_B"')) { throw 'Lao_B signature missing' }
+          if (-not (Select-String -Quiet -Path Source/PluginEditor.cpp -Pattern 'FACE MOSAIC')) { throw 'Face Mosaic UI missing' }
+          if (-not (Select-String -Quiet -Path Source/PluginEditor.cpp -Pattern 'SAVE USER PRESET')) { throw 'Preset UI missing' }
+          if (-not (Select-String -Quiet -Path VisionEngine/vision_engine.py -Pattern 'set_face_mosaic')) { throw 'Vision command missing' }
+          if (-not (Test-Path 'build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3')) { throw 'VST3 binary missing' }
+          if (-not (Test-Path 'build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe')) { throw 'Scanner missing' }
+
+      - name: Commit verified implementation to main
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f tools/apply_face_mosaic_presets.py .github/workflows/apply-face-mosaic-presets.yml
+          git add CMakeLists.txt
+          git add .github/workflows/windows-vst3-build.yml
+          git add Source/VisionReceiver.h Source/VisionReceiver.cpp Source/PluginProcessor.h Source/PluginProcessor.cpp Source/PluginEditor.h Source/PluginEditor.cpp
+          git add VisionEngine/vision_engine.py VisionEngine/face_mosaic.py VisionEngine/test_face_mosaic.py VisionEngine/GestureVisionEngine.spec
+          git diff --cached --check
+          git status --short
+          git commit -m "Add face mosaic and user preset workflow"
+          git push origin HEAD:main
