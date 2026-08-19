@@ -34,12 +34,26 @@ jobs:
           fetch-depth: 1
 
       - name: Configure JUCE project
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF
+        id: configure
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF *>&1 | Tee-Object -FilePath configure.log
+          exit $LASTEXITCODE
 
       - name: Build GestureRack VST3 and isolated scanner
-        run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+        id: build
+        if: steps.configure.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target GestureRack_VST3 --parallel 2 *>&1 | Tee-Object -FilePath build.log
+          exit $LASTEXITCODE
 
       - name: Stage VST3-only test package
+        id: package
+        if: steps.configure.outcome == 'success' && steps.build.outcome == 'success'
+        continue-on-error: true
         shell: pwsh
         run: |
           $package = "release/GestureRack-Windows-VST3"
@@ -67,6 +81,7 @@ jobs:
           Compress-Archive -Path "$package/*" -DestinationPath "release/GestureRack-Windows-VST3.zip" -Force
 
       - name: Upload Actions artifact
+        if: steps.package.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: GestureRack-Windows-VST3
@@ -74,10 +89,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish direct-download package branch
+      - name: Publish package or failure logs
+        if: always()
         shell: pwsh
         run: |
-          $artifact = (Resolve-Path "release/GestureRack-Windows-VST3.zip").Path
           $publishDir = Join-Path $env:RUNNER_TEMP "gesturerack-ci-artifacts"
           if (Test-Path $publishDir) { Remove-Item -Recurse -Force $publishDir }
 
@@ -85,22 +100,47 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             git worktree add -B ci-artifacts $publishDir origin/ci-artifacts
           } else {
-            git worktree add --detach $publishDir
+            git worktree add --detach $publishDir HEAD
             Push-Location $publishDir
             git checkout --orphan ci-artifacts
-            git rm -rf . 2>$null
+            git rm -rf --ignore-unmatch . 2>$null
             Pop-Location
           }
 
           Push-Location $publishDir
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          Copy-Item $artifact "GestureRack-Windows-VST3.zip" -Force
+
           @(
             "commit=$env:GITHUB_SHA",
-            "built=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')"
-          ) | Set-Content -Encoding ASCII "LATEST.txt"
-          git add GestureRack-Windows-VST3.zip LATEST.txt
-          git commit -m "Publish Windows VST3 $env:GITHUB_SHA"
+            "built=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
+            "configure=${{ steps.configure.outcome }}",
+            "build=${{ steps.build.outcome }}",
+            "package=${{ steps.package.outcome }}"
+          ) | Set-Content -Encoding ASCII "STATUS.txt"
+
+          $configureLog = Join-Path $env:GITHUB_WORKSPACE "configure.log"
+          $buildLog = Join-Path $env:GITHUB_WORKSPACE "build.log"
+          $artifact = Join-Path $env:GITHUB_WORKSPACE "release/GestureRack-Windows-VST3.zip"
+          if (Test-Path $configureLog) { Copy-Item $configureLog "configure.log" -Force }
+          if (Test-Path $buildLog) { Copy-Item $buildLog "build.log" -Force }
+          if (Test-Path $artifact) {
+            Copy-Item $artifact "GestureRack-Windows-VST3.zip" -Force
+          } elseif (Test-Path "GestureRack-Windows-VST3.zip") {
+            Remove-Item "GestureRack-Windows-VST3.zip" -Force
+          }
+
+          git add -A
+          git commit -m "Publish Windows VST3 status $env:GITHUB_SHA"
           git push origin ci-artifacts --force
           Pop-Location
+
+      - name: Fail job when build did not produce a package
+        if: always()
+        shell: pwsh
+        run: |
+          if ("${{ steps.configure.outcome }}" -ne "success" -or
+              "${{ steps.build.outcome }}" -ne "success" -or
+              "${{ steps.package.outcome }}" -ne "success") {
+            throw "Fast Windows VST3 package did not complete successfully."
+          }
