@@ -30,7 +30,7 @@ jobs:
 
       - name: Assemble refactor script
         shell: cmd
-        run: copy /b tools\refactor_dynamic_part01.txt+tools\refactor_dynamic_part02.txt+tools\refactor_dynamic_part03.txt+tools\refactor_dynamic_part04.txt+tools\refactor_dynamic_part05.txt+tools\refactor_dynamic_part06.txt+tools\refactor_dynamic_part07.txt+tools\refactor_dynamic_part08.txt tools\refactor_dynamic.py
+        run: copy /b tools\refactor_dynamic_part01.txt+tools\refactor_dynamic_part02.txt+tools\refactor_dynamic_part03.txt+tools\refactor_dynamic_part04.txt+tools\refactor_dynamic_part05.txt+tools\refactor_dynamic_part06.txt+tools\refactor_dynamic_part07.txt+tools\refactor_dynamic_part08.txt+tools\refactor_dynamic_part09.txt tools\refactor_dynamic.py
 
       - name: Apply dynamic chain refactor in workspace
         id: refactor
@@ -59,6 +59,7 @@ jobs:
           if (-not (Select-String -Quiet -Path CMakeLists.txt -Pattern 'VERSION 0.4.0')) { throw 'Version was not bumped to 0.4.0' }
           if (-not (Select-String -Quiet -Path Source\RackGraphManager.h -Pattern 'SlotList')) { throw 'Dynamic SlotList missing' }
           if (Select-String -Quiet -Path Source\RackGraphManager.h -Pattern 'slotCount = 9') { throw 'Fixed 9-slot rack remains' }
+          if (Select-String -Quiet -Path Source\GestureMappingEngine.cpp -Pattern 'RackGraphManager::slotCount') { throw 'Fixed mapping slot count remains' }
           if (-not (Select-String -Quiet -Path Source\PluginProcessor.h -Pattern 'gestureControllableSlotCount = 10')) { throw '10-FX gesture cap missing' }
           if (-not (Select-String -Quiet -Path Source\GestureBypassWrapper.h -Pattern 'zeroInputInstrument')) { throw 'Instrument bridge capability missing' }
           if (Select-String -Quiet -Path Source\PluginCategory.cpp -Pattern '! plugin.isInstrument') { throw 'Instrument browser filter remains' }
