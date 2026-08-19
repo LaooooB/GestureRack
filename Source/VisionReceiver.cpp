@@ -190,6 +190,14 @@ bool VisionReceiver::toggleSwapHandedness()
     return sendControlCommand (makeCommand ("toggle_swap_handedness"));
 }
 
+bool VisionReceiver::setFaceMosaicEnabled (bool enabled)
+{
+    auto command = makeCommand ("set_face_mosaic");
+    if (auto* object = command.getDynamicObject())
+        object->setProperty ("value", enabled);
+    return sendControlCommand (command);
+}
+
 void VisionReceiver::run()
 {
     std::array<char, 16384> buffer {};

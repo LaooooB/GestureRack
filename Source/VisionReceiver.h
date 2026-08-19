@@ -25,6 +25,7 @@ public:
     bool cancelHandCalibration();
     bool setSwapHandedness (bool shouldSwap);
     bool toggleSwapHandedness();
+    bool setFaceMosaicEnabled (bool enabled);
 
 private:
     void run() override;

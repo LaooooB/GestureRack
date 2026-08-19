@@ -104,6 +104,8 @@ public:
     bool cancelHandCalibration() { return vision.cancelHandCalibration(); }
     bool setSwapHandedness (bool shouldSwap) { return vision.setSwapHandedness (shouldSwap); }
     bool toggleSwapHandedness() { return vision.toggleSwapHandedness(); }
+    bool isFaceMosaicEnabled() const noexcept { return faceMosaicEnabled.load (std::memory_order_relaxed); }
+    void setFaceMosaicEnabled (bool enabled) noexcept;
 
     bool isGestureEnabled() const noexcept { return gestureEnabled.load (std::memory_order_relaxed); }
     void setGestureEnabled (bool enabled) noexcept;
@@ -221,6 +223,8 @@ private:
 
     gr::VisionReceiver vision;
     std::atomic<bool> gestureEnabled { true };
+    std::atomic<bool> faceMosaicEnabled { false };
+    bool lastVisionConnectedForCommands = false;
     std::atomic<int> selectedSlot { 0 };
     gr::RightGestureRuntime rightRuntime;
     int lastVisionStableSlot = 0;

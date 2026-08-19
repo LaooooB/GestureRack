@@ -540,6 +540,8 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (
     addAndMakeVisible (removeButton);
     addAndMakeVisible (bypassButton);
     addAndMakeVisible (pluginMoreButton);
+    addAndMakeVisible (faceMosaicButton);
+    addAndMakeVisible (presetButton);
     addAndMakeVisible (settingsButton);
     addAndMakeVisible (menuButton);
 
@@ -596,6 +598,20 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (
         [this]
         {
             showMainMenu();
+        };
+
+    presetButton.onClick =
+        [this]
+        {
+            showPresetMenu();
+        };
+
+    faceMosaicButton.setClickingTogglesState (true);
+    faceMosaicButton.setToggleState (processor.isFaceMosaicEnabled(), juce::dontSendNotification);
+    faceMosaicButton.onClick =
+        [this]
+        {
+            processor.setFaceMosaicEnabled (faceMosaicButton.getToggleState());
         };
 
     settingsButton.setAccentWhenOn (false);
@@ -771,6 +787,7 @@ void GestureRackAudioProcessorEditor::timerCallback()
     const auto loaded = processor.isSlotLoaded (selected);
     const auto bypassed = processor.isSlotBypassed (selected);
     const auto vision = processor.getDualHandVisionSnapshot();
+    faceMosaicButton.setToggleState (processor.isFaceMosaicEnabled(), juce::dontSendNotification);
     const auto connected = processor.isVisionConnected();
     frameReader.readLatest (cameraFrame);
     refreshCameraDisplay();
@@ -984,6 +1001,98 @@ void GestureRackAudioProcessorEditor::showMainMenu()
                                                                         "Gesture Rack",
                                                                         "Gesture Rack\nGesture-controlled VST3 effect rack.");
                         });
+}
+
+
+void GestureRackAudioProcessorEditor::showPresetMenu()
+{
+    juce::PopupMenu menu;
+    menu.setLookAndFeel (&ui::themeLookAndFeel());
+    menu.addItem (1, "SAVE USER PRESET...");
+    menu.addItem (2, "LOAD USER PRESET...");
+
+    juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton).withStandardItemHeight (27),
+                        [safe] (int result)
+                        {
+                            if (safe == nullptr || result == 0) return;
+                            if (result == 1) safe->saveUserPreset();
+                            else if (result == 2) safe->loadUserPreset();
+                        });
+}
+
+void GestureRackAudioProcessorEditor::saveUserPreset()
+{
+    auto directory = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                         .getChildFile ("Gesture Rack")
+                         .getChildFile ("Presets");
+    directory.createDirectory();
+
+    presetFileChooser = std::make_unique<juce::FileChooser> (
+        "Save Gesture Rack user preset",
+        directory.getChildFile ("Gesture Rack.grpreset"),
+        "*.grpreset",
+        true);
+
+    juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
+    presetFileChooser->launchAsync (
+        juce::FileBrowserComponent::saveMode
+            | juce::FileBrowserComponent::canSelectFiles
+            | juce::FileBrowserComponent::warnAboutOverwriting,
+        [safe] (const juce::FileChooser& chooser)
+        {
+            if (safe == nullptr) return;
+            auto file = chooser.getResult();
+            if (file == juce::File()) return;
+            if (! file.hasFileExtension (".grpreset"))
+                file = file.withFileExtension (".grpreset");
+
+            juce::MemoryBlock state;
+            safe->processor.getStateInformation (state);
+            if (state.getSize() == 0 || ! file.replaceWithData (state.getData(), state.getSize()))
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Preset Save Failed",
+                    "Could not write the Gesture Rack user preset.");
+            }
+        });
+}
+
+void GestureRackAudioProcessorEditor::loadUserPreset()
+{
+    auto directory = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                         .getChildFile ("Gesture Rack")
+                         .getChildFile ("Presets");
+    directory.createDirectory();
+
+    presetFileChooser = std::make_unique<juce::FileChooser> (
+        "Load Gesture Rack user preset", directory, "*.grpreset", true);
+
+    juce::Component::SafePointer<GestureRackAudioProcessorEditor> safe (this);
+    presetFileChooser->launchAsync (
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [safe] (const juce::FileChooser& chooser)
+        {
+            if (safe == nullptr) return;
+            const auto file = chooser.getResult();
+            if (! file.existsAsFile()) return;
+
+            juce::MemoryBlock state;
+            if (! file.loadFileAsData (state) || state.getSize() == 0)
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Preset Load Failed",
+                    "Could not read the Gesture Rack user preset.");
+                return;
+            }
+
+            safe->processor.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+            safe->displayedChildIdentity = 0;
+            safe->displayedSlot = -1;
+            safe->repaint();
+        });
 }
 
 void GestureRackAudioProcessorEditor::showPluginMoreMenu()
@@ -1394,7 +1503,7 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
     const auto snapshot = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
     auto topRight = topBarBounds;
-    topRight.removeFromRight (settingsButton.getWidth() + menuButton.getWidth() + 16);
+    topRight.removeFromRight (presetButton.getWidth() + settingsButton.getWidth() + menuButton.getWidth() + 24);
 
     auto versionArea = topRight.removeFromRight (88);
     g.setColour (ui::textMuted.withAlpha (0.82f));
@@ -1787,7 +1896,9 @@ void GestureRackAudioProcessorEditor::resized()
     pluginViewport.setBounds (pluginViewportBounds);
 
     auto cameraContent = cameraPanelBounds.reduced (scaledMetric (uiScale, 14));
-    cameraContent.removeFromTop (scaledMetric (uiScale, 32));
+    auto cameraHeaderControls = cameraContent.removeFromTop (scaledMetric (uiScale, 28));
+    faceMosaicButton.setBounds (cameraHeaderControls.removeFromRight (scaledMetric (uiScale, 104)));
+    cameraContent.removeFromTop (scaledMetric (uiScale, 4));
     cameraTelemetryBounds = cameraContent.removeFromBottom (scaledMetric (uiScale, 68));
     cameraContent.removeFromBottom (scaledMetric (uiScale, 8));
     cameraPreviewBounds = cameraContent;
@@ -1796,6 +1907,8 @@ void GestureRackAudioProcessorEditor::resized()
     menuButton.setBounds (topRight.removeFromRight (scaledMetric (uiScale, 34)));
     topRight.removeFromRight (scaledMetric (uiScale, 8));
     settingsButton.setBounds (topRight.removeFromRight (scaledMetric (uiScale, 34)));
+    topRight.removeFromRight (scaledMetric (uiScale, 8));
+    presetButton.setBounds (topRight.removeFromRight (scaledMetric (uiScale, 74)));
 
     if (pluginBrowser != nullptr)
     {

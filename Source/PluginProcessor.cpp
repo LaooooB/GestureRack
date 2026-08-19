@@ -8,7 +8,7 @@ constexpr auto slotTag = "SLOT";
 constexpr auto descriptionTag = "PLUGIN_DESCRIPTION";
 constexpr auto pluginStateTag = "PLUGIN_STATE";
 constexpr auto mappingsTag = "MAPPINGS";
-constexpr int currentStateVersion = 8;
+constexpr int currentStateVersion = 9;
 }
 
 GestureRackAudioProcessor::GestureRackAudioProcessor()
@@ -205,6 +205,9 @@ void GestureRackAudioProcessor::timerCallback()
         updateTotalLatency();
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
+    if (connected && ! lastVisionConnectedForCommands)
+        vision.setFaceMosaicEnabled (faceMosaicEnabled.load (std::memory_order_relaxed));
+    lastVisionConnectedForCommands = connected;
     const auto packetAgeMs = snapshot.receivedAtMs > 0
         ? juce::Time::currentTimeMillis() - snapshot.receivedAtMs : 1000000;
     const auto controlFresh = connected && packetAgeMs >= 0 && packetAgeMs <= 300;
@@ -317,6 +320,12 @@ void GestureRackAudioProcessor::setSelectedSlot (int slotIndex) noexcept
         testSignalEnabled.store (false, std::memory_order_relaxed);
         parameterLearnManager.cancel();
     }
+}
+
+void GestureRackAudioProcessor::setFaceMosaicEnabled (bool enabled) noexcept
+{
+    faceMosaicEnabled.store (enabled, std::memory_order_relaxed);
+    vision.setFaceMosaicEnabled (enabled);
 }
 
 void GestureRackAudioProcessor::setGestureEnabled (bool enabled) noexcept
@@ -914,6 +923,11 @@ void GestureRackAudioProcessor::getStateInformation (
             std::memory_order_relaxed));
 
     root.setAttribute (
+        "faceMosaicEnabled",
+        faceMosaicEnabled.load (
+            std::memory_order_relaxed));
+
+    root.setAttribute (
         "selectedSlot",
         getSelectedSlot());
 
@@ -1190,6 +1204,8 @@ void GestureRackAudioProcessor::setStateInformation (
                     "gestureEnabled",
                     true),
                 std::memory_order_relaxed);
+            setFaceMosaicEnabled (
+                stateCopy->getBoolAttribute ("faceMosaicEnabled", false));
 
             const auto version =
                 stateCopy->getIntAttribute (

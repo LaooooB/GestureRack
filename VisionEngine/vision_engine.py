@@ -37,6 +37,10 @@ def default_shadow_model_path() -> Path:
     return _resource_dir() / "models" / "right_gesture_landmark_v1.npz"
 
 
+def default_face_cascade_path() -> Path:
+    return _resource_dir() / "models" / "haarcascade_frontalface_default.xml"
+
+
 from continuous_motion import HeightMotionFilter
 from gesture_stabilizer import GestureStabilizer
 from hand_role_calibration import RightHandCalibration
@@ -47,6 +51,7 @@ from shared_frame import SHM_NAME, SharedFrameWriter
 from slot_selector import SlotStabilizer, classify_slot_1_to_5
 from tiny_landmark_classifier import TinyLandmarkClassifier
 from vision_profile import VisionProfileStore
+from face_mosaic import FaceMosaicProcessor
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/"
@@ -157,6 +162,13 @@ class GestureVisionEngine:
         self.session_id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
         self.last_packet = None
+
+        # Privacy is a preview-only post process. MediaPipe always receives the raw frame.
+        self.preview_config_lock = threading.Lock()
+        self.face_mosaic_enabled = False
+        self.face_mosaic = FaceMosaicProcessor(default_face_cascade_path())
+        if not self.face_mosaic.available:
+            print("Face mosaic detector unavailable; preview privacy will remain off.")
 
         self.shadow_model_path = Path(shadow_model_path) if shadow_model_path is not None else None
         shadow_model = (
@@ -292,6 +304,10 @@ class GestureVisionEngine:
             if rgb.ndim != 3 or rgb.shape[2] < 3:
                 return False
             rgb = rgb[:, :, :3]
+            with self.preview_config_lock:
+                mosaic_enabled = self.face_mosaic_enabled
+            if mosaic_enabled and self.face_mosaic.available:
+                rgb = self.face_mosaic.process_rgb(rgb)
             if not rgb.flags.c_contiguous:
                 rgb = np.ascontiguousarray(rgb)
             height, width = rgb.shape[:2]
@@ -362,6 +378,11 @@ class GestureVisionEngine:
 
     def _handle_control_command(self, command: dict) -> None:
         name = str(command.get("command", "")).strip().lower()
+        if name == "set_face_mosaic":
+            with self.preview_config_lock:
+                self.face_mosaic_enabled = bool(command.get("value", False))
+            return
+
         now_ms = int(time.monotonic() * 1000)
         with self.role_lock:
             if name == "begin_hand_calibration":

@@ -100,7 +100,7 @@ else()
 endif()
 
 juce_add_plugin(GestureRack
-    COMPANY_NAME "Gesture Rack"
+    COMPANY_NAME "Lao_B"
     BUNDLE_ID "com.gesturerack.audio"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT TRUE

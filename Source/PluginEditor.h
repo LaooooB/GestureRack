@@ -78,6 +78,9 @@ private:
     void hidePluginBrowser();
     void showSettingsMenu();
     void showMainMenu();
+    void showPresetMenu();
+    void saveUserPreset();
+    void loadUserPreset();
     void showPluginMoreMenu();
     void setUiScale (float newScale);
     void syncSlotButtons();
@@ -113,6 +116,8 @@ private:
     gr::ui::IconButton pluginMoreButton { gr::ui::Icon::more, "Plugin options" };
 
     gr::ui::AnimatedTextButton swapHandsButton { "SWAP L/R" };
+    gr::ui::AnimatedTextButton faceMosaicButton { "FACE MOSAIC" };
+    gr::ui::AnimatedTextButton presetButton { "PRESET" };
 
     gr::ui::IconButton settingsButton { gr::ui::Icon::settings, "Settings" };
     gr::ui::IconButton menuButton { gr::ui::Icon::menu, "Menu" };
@@ -142,6 +147,7 @@ private:
     juce::Rectangle<int> cameraTelemetryBounds;
 
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
+    std::unique_ptr<juce::FileChooser> presetFileChooser;
     bool adaptiveResizeInProgress = false;
     float uiScale = 1.0f;
 

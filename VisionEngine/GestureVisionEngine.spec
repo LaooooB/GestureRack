@@ -1,7 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('models/gesture_recognizer.task', 'models')]
+datas = [
+    ('models/gesture_recognizer.task', 'models'),
+    ('models/haarcascade_frontalface_default.xml', 'models'),
+]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('mediapipe')
