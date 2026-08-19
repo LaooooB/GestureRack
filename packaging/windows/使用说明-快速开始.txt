@@ -1,6 +1,6 @@
-Gesture Rack v0.6.0 — Windows 快速开始
+Gesture Rack — Windows 快速开始
 
-这是正式 Windows x64 发布包，不要求安装 Python。
+这个包不要求安装 Python。
 
 1. 安装 VST3
    把 VST3 文件夹里的 “Gesture Rack.vst3” 整个复制到：
@@ -13,7 +13,6 @@ Gesture Rack v0.6.0 — Windows 快速开始
    GestureVisionEngine.exe
 
    第一次启动摄像头时请允许摄像头权限。保持这个程序运行。
-   正式包已经内置识别运行时与 MediaPipe 模型，不需要额外安装 Python 或单独下载模型。
 
 3. 在 DAW 里加载 Gesture Rack
    重新扫描 VST3，然后插入 “Gesture Rack”。
@@ -43,8 +42,16 @@ Gesture Rack v0.6.0 — Windows 快速开始
 
 摄像头和手势点线：
 - Gesture Rack 插件内部会显示真实摄像头画面。
+- Camera 区上方的 FACE MOSAIC 开关只对检测到的人脸区域做马赛克；手势识别仍然使用未打码的原始摄像头帧，因此不会因为开启马赛克而降低手势识别输入质量。
+- FACE MOSAIC 状态会随工程状态和用户 Preset 一起保存。
 - 左右手的 21 个 MediaPipe landmark 点和骨骼连线会直接叠加在同一帧画面上。
 - 如果显示的物理 LEFT / RIGHT 不正确，请重新 CALIBRATE RIGHT。
+
+用户 Preset：
+- 顶部 PRESET 菜单只有 SAVE USER PRESET... 和 LOAD USER PRESET...。
+- Gesture Rack 不附带任何 factory preset。
+- 用户 Preset 使用 .grpreset 文件，保存完整 Rack 状态，包括已加载插件状态、手势映射、bypass/选择状态以及 FACE MOSAIC 状态。
+- 默认文件位置指向 Documents\Gesture Rack\Presets，也可以在文件选择器里自行选择位置。
 
 新的识别逻辑：
 - 系统先识别大类手型，再单独判断 Fist / Thumb，避免拳头和拇指手势直接互相抢分类。
@@ -59,7 +66,6 @@ Gesture Rack v0.6.0 — Windows 快速开始
 - 如果左右手角色反了，重新点 CALIBRATE RIGHT；也可以使用 SWAP L/R 手动切换。
 
 手势识别数据采集（可选，开发/优化识别准确率时使用）：
-- 正式包中工具位于：Tools\GestureDataCollector.exe。
 - 保持 GestureVisionEngine.exe 正常运行并先完成 CALIBRATE RIGHT。
 - 再双击 Tools\GestureDataCollector.exe。
 - 程序会依次让你录制：None hard-negative、Open Palm、Fist、Victory、Thumb Up、Thumb Down、Thumb Left、Thumb Right。
@@ -69,6 +75,7 @@ Gesture Rack v0.6.0 — Windows 快速开始
 
 开发/诊断说明：
 - 正常发行包里，生产控制路径使用分层几何识别 + 时间稳定器；MediaPipe canned gesture 只作为弱辅助证据。
+- FACE MOSAIC 是独立 Preview Privacy 后处理；人脸检测低频运行并复用最近的 face box，不会阻塞手势识别主路径。
 - tiny learned classifier 现在只学习 OpenPalm / FoldedFour / Victory / Other 四个 Shape Family，并保持 shadow-only，除非独立 recording group 的 held-out 数据证明它确实更好。
 - Thumb 的上下左右方向不会交给 tiny model 学，仍由确定性方向解析器负责。
 - GestureDataCollector.exe 只监听已经运行的 production VisionEngine 数据，不会再打开第二个摄像头。
