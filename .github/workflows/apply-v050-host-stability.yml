@@ -77,3 +77,5 @@ jobs:
           git add CMakeLists.txt Source/PluginProcessor.h Source/PluginProcessor.cpp Source/PluginEditor.cpp .github/workflows/windows-vst3-fast-package.yml
           git commit -m "Complete v0.5.0 hosted audio stability refactor"
           git push origin HEAD:main
+
+# retrigger 2
