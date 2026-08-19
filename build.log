@@ -2,8 +2,6 @@ MSBuild version 17.14.51+25f168cee for .NET Framework
 
   Checking File Globs
   1>Checking Build System
-  Generating GestureRack_artefacts/JuceLibraryCode/GestureRack_resources.rc
-  Building Custom Rule D:/a/GestureRack/GestureRack/CMakeLists.txt
   Building VST3 manifest helper for GestureRack
   -- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.20348.
   -- The CXX compiler identification is MSVC 19.44.35228.0
@@ -12,7 +10,7 @@ MSBuild version 17.14.51+25f168cee for .NET Framework
   -- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
   -- Detecting CXX compile features
   -- Detecting CXX compile features - done
-  -- Configuring done (1.7s)
+  -- Configuring done (1.5s)
   -- Generating done (0.0s)
   -- Build files have been written to: D:/a/GestureRack/GestureRack/build/vst3_helpers/GestureRack
   MSBuild version 17.14.51+25f168cee for .NET Framework
@@ -23,17 +21,19 @@ MSBuild version 17.14.51+25f168cee for .NET Framework
     vst3_helper.vcxproj -> D:\a\GestureRack\GestureRack\build\vst3_helpers\GestureRack\vst3_helper.exe
     Building Custom Rule D:/a/GestureRack/GestureRack/JUCE/extras/Build/CMake/juce_vst3_helper/CMakeLists.txt
   Building Custom Rule D:/a/GestureRack/GestureRack/CMakeLists.txt
+  Generating GestureRack_artefacts/JuceLibraryCode/GestureRack_resources.rc
+  Building Custom Rule D:/a/GestureRack/GestureRack/CMakeLists.txt
   GestureRack_rc_lib.vcxproj -> D:\a\GestureRack\GestureRack\build\GestureRack_rc_lib.dir\Release\GestureRack_rc_lib.lib
   Generating juce_binarydata_GestureRackFonts/JuceLibraryCode/BinaryData1.cpp, juce_binarydata_GestureRackFonts/JuceLibraryCode/BinaryData2.cpp, juce_binarydata_GestureRackFonts/JuceLibraryCode/BinaryData3.cpp, juce_binarydata_GestureRackFonts/JuceLibraryCode/BinaryData4.cpp, juce_binarydata_GestureRackFonts/JuceLibraryCode/BinaryData.h
   Generating GestureRackScanner_artefacts/JuceLibraryCode/GestureRackScanner_resources.rc
   Building Custom Rule D:/a/GestureRack/GestureRack/CMakeLists.txt
   Building Custom Rule D:/a/GestureRack/GestureRack/CMakeLists.txt
+  BinaryData1.cpp
   GestureRackScanner_rc_lib.vcxproj -> D:\a\GestureRack\GestureRack\build\GestureRackScanner_rc_lib.dir\Release\GestureRackScanner_rc_lib.lib
   Generating GestureRackScanner_artefacts/JuceLibraryCode/JuceHeader.h
   Building Custom Rule D:/a/GestureRack/GestureRack/CMakeLists.txt
-  PluginCategory.cpp
-  BinaryData1.cpp
   BinaryData2.cpp
+  PluginCategory.cpp
   BinaryData3.cpp
   BinaryData4.cpp
   Generating Code...
@@ -62,11 +62,11 @@ D:\a\GestureRack\GestureRack\Source\GestureBypassWrapper.cpp(229,38): warning C4
   RackGraphManager.cpp
   juce_gui_basics_5.cpp
   PluginProcessor.cpp
-  juce_graphics.cpp
 D:\a\GestureRack\GestureRack\Source\PluginProcessor.cpp(478,16): warning C4458: declaration of 'blockSize' hides class member [D:\a\GestureRack\GestureRack\build\GestureRack.vcxproj]
       D:\a\GestureRack\GestureRack\JUCE\modules\juce_audio_processors_headless\processors\juce_AudioProcessor.h(1649,9):
       see declaration of 'juce::AudioProcessor::blockSize'
   
+  juce_graphics.cpp
   RackInteraction.cpp
   PluginCategory.cpp
   juce_graphics_Harfbuzz.cpp
@@ -83,8 +83,8 @@ D:\a\GestureRack\GestureRack\Source\PluginProcessor.cpp(478,16): warning C4458: 
   juce_audio_processors_headless_ara.cpp
   juce_audio_processors_headless_lv2_libs.cpp
   juce_audio_basics.cpp
-  Generating Code...
   juce_gui_basics_2.cpp
+  Generating Code...
   juce_gui_basics_3.cpp
   Generating Code...
   Compiling...
@@ -93,12 +93,12 @@ D:\a\GestureRack\GestureRack\Source\PluginProcessor.cpp(478,16): warning C4458: 
   juce_graphics.cpp
   juce_graphics_Harfbuzz.cpp
   juce_events.cpp
-  juce_core.cpp
   Compiling...
   juce_audio_formats.cpp
+  juce_core.cpp
   juce_core_CompilationTime.cpp
-  juce_data_structures.cpp
   juce_audio_devices.cpp
+  juce_data_structures.cpp
   juce_audio_processors_headless.cpp
   Generating Code...
   juce_audio_processors_headless_ara.cpp
