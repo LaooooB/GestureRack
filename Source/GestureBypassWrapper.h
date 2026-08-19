@@ -51,7 +51,8 @@ struct HostedPluginTelemetry
     HostedSafetyReason lastSafetyReason = HostedSafetyReason::none;
 };
 
-class GestureBypassWrapper final : public juce::AudioProcessor
+class GestureBypassWrapper final : public juce::AudioProcessor,
+                                   private juce::AsyncUpdater
 {
 public:
     static constexpr int maxCompensatedLatencySamples = 524288;
@@ -71,7 +72,6 @@ public:
                           const juce::AudioChannelSet& inputSet,
                           const juce::AudioChannelSet& outputSet,
                           const juce::AudioChannelSet& hostSidechainSet,
-                          bool allowZeroMainInputToUse,
                           HostedPluginCapabilities capabilitiesToUse,
                           std::atomic<bool>& requestedBypassState);
     ~GestureBypassWrapper() override;
@@ -81,10 +81,6 @@ public:
     HostedPluginTelemetry getTelemetry() const noexcept;
     int getChildLatencySamples() const noexcept;
     bool hasChildEditor() const noexcept { return child != nullptr && child->hasEditor(); }
-
-    bool servicePendingReconfiguration (const juce::AudioChannelSet& hostSidechainLayout,
-                                        double sampleRate,
-                                        int samplesPerBlock);
 
     juce::AudioProcessorEditor* getOrCreateEmbeddedEditor();
     void releaseEmbeddedEditor();
@@ -139,9 +135,10 @@ private:
         }
     };
 
+    void handleAsyncUpdate() override;
     BusTopologySnapshot captureChildTopology() const noexcept;
     void allocateProcessingBuffers (double sampleRate, int samplesPerBlock);
-    void requestReconfigurationForBlockSize (int samples) noexcept;
+    void requestReconfiguration (int minimumSamples, HostedSafetyReason reason) noexcept;
     void renderImmediateFallback (const juce::AudioBuffer<float>& input,
                                   juce::AudioBuffer<float>& output,
                                   int samples) noexcept;
@@ -155,7 +152,6 @@ private:
 
     const juce::AudioChannelSet requestedMainInput;
     const juce::AudioChannelSet requestedMainOutput;
-    juce::AudioChannelSet configuredHostSidechain;
     const bool allowZeroMainInput;
 
     juce::AudioBuffer<float> childBuffer;
@@ -173,6 +169,8 @@ private:
     std::atomic<bool> reconfigurationRequested { false };
     std::atomic<int> requestedScratchSamples { 0 };
     std::atomic<int> safetyHoldRemaining { 0 };
+    std::atomic<double> currentSampleRate { 44100.0 };
+    std::atomic<int> currentBlockSize { 512 };
 
     std::atomic<float> telemetryInputPeak { 0.0f };
     std::atomic<float> telemetryOutputPeak { 0.0f };
