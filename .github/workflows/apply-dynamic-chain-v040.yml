@@ -1,0 +1,83 @@
+name: Apply Dynamic Chain v0.4.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-dynamic-chain-v040.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-build-commit:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Checkout JUCE 8.0.15
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.15
+          path: JUCE
+          fetch-depth: 1
+
+      - name: Assemble refactor script
+        shell: cmd
+        run: copy /b tools\refactor_dynamic_part01.txt+tools\refactor_dynamic_part02.txt+tools\refactor_dynamic_part03.txt+tools\refactor_dynamic_part04.txt+tools\refactor_dynamic_part05.txt+tools\refactor_dynamic_part06.txt+tools\refactor_dynamic_part07.txt+tools\refactor_dynamic_part08.txt tools\refactor_dynamic.py
+
+      - name: Apply dynamic chain refactor in workspace
+        id: refactor
+        shell: pwsh
+        run: |
+          python tools/refactor_dynamic.py *>&1 | Tee-Object -FilePath refactor.log
+          exit $LASTEXITCODE
+
+      - name: Configure
+        id: configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF *>&1 | Tee-Object -FilePath configure.log
+          exit $LASTEXITCODE
+
+      - name: Build VST3 and scanner
+        id: build
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target GestureRack_VST3 --parallel 2 *>&1 | Tee-Object -FilePath build.log
+          exit $LASTEXITCODE
+
+      - name: Verify dynamic architecture markers
+        shell: pwsh
+        run: |
+          if (-not (Select-String -Quiet -Path CMakeLists.txt -Pattern 'VERSION 0.4.0')) { throw 'Version was not bumped to 0.4.0' }
+          if (-not (Select-String -Quiet -Path Source\RackGraphManager.h -Pattern 'SlotList')) { throw 'Dynamic SlotList missing' }
+          if (Select-String -Quiet -Path Source\RackGraphManager.h -Pattern 'slotCount = 9') { throw 'Fixed 9-slot rack remains' }
+          if (-not (Select-String -Quiet -Path Source\PluginProcessor.h -Pattern 'gestureControllableSlotCount = 10')) { throw '10-FX gesture cap missing' }
+          if (-not (Select-String -Quiet -Path Source\GestureBypassWrapper.h -Pattern 'zeroInputInstrument')) { throw 'Instrument bridge capability missing' }
+          if (Select-String -Quiet -Path Source\PluginCategory.cpp -Pattern '! plugin.isInstrument') { throw 'Instrument browser filter remains' }
+
+      - name: Commit verified product source to main
+        shell: pwsh
+        run: |
+          git fetch origin main
+          $remote = (git rev-parse origin/main).Trim()
+          if ($remote -ne $env:GITHUB_SHA) { throw "main moved during verified refactor: $remote != $env:GITHUB_SHA" }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt `
+            Source/GestureBypassWrapper.h Source/GestureBypassWrapper.cpp `
+            Source/RackGraphManager.h Source/RackGraphManager.cpp `
+            Source/PluginSlot.h Source/PluginSlot.cpp `
+            Source/GestureMappingEngine.h Source/GestureMappingEngine.cpp `
+            Source/PluginProcessor.h Source/PluginProcessor.cpp `
+            Source/RackInteraction.cpp Source/PluginCategory.cpp `
+            Source/PluginEditor.h Source/PluginEditor.cpp
+          git commit -m "Add unlimited plugin chain and instrument hosting"
+          git push origin HEAD:main
