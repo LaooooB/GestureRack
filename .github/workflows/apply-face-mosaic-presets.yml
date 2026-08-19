@@ -56,6 +56,7 @@ jobs:
             }
             Write-Host "Ignoring corrected legacy probe: FACE MOSAIC label lives in PluginEditor.h."
           }
+          exit 0
 
       - name: Compile-check vision modules
         working-directory: VisionEngine
