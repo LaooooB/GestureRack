@@ -78,11 +78,13 @@ jobs:
             "Plugin chain: dynamic/unbounded with one trailing add slot",
             "Gesture selection: FX 1-10 only; FX 11+ mouse-only",
             "Instruments: supported with MIDI-driven zero-input audio generation",
-            "Hosted rack/meta effects: strict main-I/O containment",
-            "Audio bridge: isolated child processing buffer for every hosted plugin",
-            "Topology: audio-thread-safe fallback with message-thread async recovery",
-            "DSP safety: NaN/Inf and runaway peak blocks rejected per hosted slot",
-            "Sidechain/AUX: disabled by default in v0.5.0 stability mode"
+            "Hosted rack/meta effects: raw AudioPluginInstance graph hosting",
+            "Audio graph: direct child nodes with no secondary hosted-audio wrapper",
+            "Topology: bus-aware Main/Sidechain/AUX with dynamic message-thread rebuild",
+            "Latency: graph-native latency reporting and host compensation updates",
+            "MIDI: serial rack routing through MIDI-capable hosted plug-ins",
+            "Processing precision: float and double host paths supported",
+            "Sidechain/AUX: optional host-routed endpoints; child buses are not globally disabled"
           ) | Set-Content -Encoding UTF8 "$package/VERSION.txt"
           if (-not (Test-Path $vst3Binary)) { throw "Gesture Rack VST3 binary missing" }
           if (-not (Test-Path $scannerBinary)) { throw "GestureRackScanner missing from VST3 bundle" }
