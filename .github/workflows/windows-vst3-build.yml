@@ -45,15 +45,19 @@ jobs:
 
       - name: Compile-check vision entrypoints
         working-directory: VisionEngine
-        run: python -m py_compile vision_engine.py shadow_monitor.py collect_runtime_dataset.py collect_gesture_session.py analyze_gesture_dataset.py gesture_event_metrics.py train_tiny_classifier.py
+        run: python -m py_compile vision_engine.py face_mosaic.py shadow_monitor.py collect_runtime_dataset.py collect_gesture_session.py analyze_gesture_dataset.py gesture_event_metrics.py train_tiny_classifier.py
 
       - name: Run vision regression tests
         working-directory: VisionEngine
-        run: python -m unittest -v test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py test_landmark_features.py test_gesture_dataset.py test_tiny_landmark_classifier.py test_shadow_evaluator.py test_training_dataset_quality.py test_analyze_gesture_dataset.py test_gesture_event_metrics.py
+        run: python -m unittest -v test_face_mosaic.py test_slot_selector.py test_right_gesture_classifier.py test_gesture_stabilizer.py test_gesture_thresholds.py test_hand_role_resolver.py test_hand_role_calibration.py test_shared_frame.py test_continuous_motion.py test_landmark_features.py test_gesture_dataset.py test_tiny_landmark_classifier.py test_shadow_evaluator.py test_training_dataset_quality.py test_analyze_gesture_dataset.py test_gesture_event_metrics.py
 
       - name: Download bundled MediaPipe gesture model
         working-directory: VisionEngine
         run: python -c "from pathlib import Path; from vision_engine import ensure_model; ensure_model(Path('models/gesture_recognizer.task'))"
+
+      - name: Download bundled OpenCV face cascade
+        working-directory: VisionEngine
+        run: python -c "from pathlib import Path; import urllib.request; p=Path('models/haarcascade_frontalface_default.xml'); p.parent.mkdir(parents=True, exist_ok=True); urllib.request.urlretrieve('https://raw.githubusercontent.com/opencv/opencv/4.10.0/data/haarcascades/haarcascade_frontalface_default.xml', p); assert p.stat().st_size > 100000"
 
       - name: Build GestureVisionEngine EXE
         working-directory: VisionEngine
@@ -101,9 +105,12 @@ jobs:
             "Version: $version",
             "Commit: $env:GITHUB_SHA",
             "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
+            "Manufacturer: Lao_B",
             "Python required: no",
             "Vision runtime: GestureVisionEngine.exe bundled",
             "Vision model: MediaPipe gesture_recognizer.task embedded in frozen runtime",
+            "Face privacy: optional face-only mosaic preview with bundled OpenCV detector",
+            "User presets: SAVE/LOAD .grpreset files; no factory presets bundled",
             "Hosted plugin UI: embedded in Gesture Rack",
             "Hosted DSP: raw bus-aware AudioProcessorGraph",
             "Sidechain/AUX: host-aware routing enabled",
