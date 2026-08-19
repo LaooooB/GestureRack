@@ -58,6 +58,34 @@ jobs:
           }
           exit 0
 
+      - name: Normalize pinned face cascade packaging
+        shell: pwsh
+        run: |
+          $specPath = 'VisionEngine/GestureVisionEngine.spec'
+          $spec = Get-Content $specPath -Raw
+          $spec = $spec -replace "(?m)^from pathlib import Path\r?\n\r?\nimport cv2\r?\n", ''
+          $spec = $spec.Replace("(str(Path(cv2.data.haarcascades) / 'haarcascade_frontalface_default.xml'), 'models'),", "('models/haarcascade_frontalface_default.xml', 'models'),")
+          Set-Content -Path $specPath -Value $spec -Encoding UTF8 -NoNewline
+
+          $workflowPath = '.github/workflows/windows-vst3-build.yml'
+          $workflow = Get-Content $workflowPath -Raw
+          $mediaPipeStep = @'
+      - name: Download bundled MediaPipe gesture model
+        working-directory: VisionEngine
+        run: python -c "from pathlib import Path; from vision_engine import ensure_model; ensure_model(Path('models/gesture_recognizer.task'))"
+'@
+          $cascadeStep = @'
+
+      - name: Download bundled OpenCV face cascade
+        working-directory: VisionEngine
+        run: python -c "from pathlib import Path; import urllib.request; p=Path('models/haarcascade_frontalface_default.xml'); p.parent.mkdir(parents=True, exist_ok=True); urllib.request.urlretrieve('https://raw.githubusercontent.com/opencv/opencv/4.10.0/data/haarcascades/haarcascade_frontalface_default.xml', p); assert p.stat().st_size > 100000"
+'@
+          if (-not $workflow.Contains('Download bundled OpenCV face cascade')) {
+            if (-not $workflow.Contains($mediaPipeStep.TrimEnd())) { throw 'Official workflow MediaPipe insertion point missing' }
+            $workflow = $workflow.Replace($mediaPipeStep.TrimEnd(), $mediaPipeStep.TrimEnd() + $cascadeStep)
+            Set-Content -Path $workflowPath -Value $workflow -Encoding UTF8 -NoNewline
+          }
+
       - name: Compile-check vision modules
         working-directory: VisionEngine
         run: python -m py_compile vision_engine.py face_mosaic.py test_face_mosaic.py
@@ -69,6 +97,10 @@ jobs:
       - name: Download production MediaPipe gesture model
         working-directory: VisionEngine
         run: python -c "from pathlib import Path; from vision_engine import ensure_model; ensure_model(Path('models/gesture_recognizer.task'))"
+
+      - name: Download pinned OpenCV face cascade
+        working-directory: VisionEngine
+        run: python -c "from pathlib import Path; import urllib.request; p=Path('models/haarcascade_frontalface_default.xml'); p.parent.mkdir(parents=True, exist_ok=True); urllib.request.urlretrieve('https://raw.githubusercontent.com/opencv/opencv/4.10.0/data/haarcascades/haarcascade_frontalface_default.xml', p); assert p.stat().st_size > 100000"
 
       - name: Build and smoke-test frozen VisionEngine
         working-directory: VisionEngine
@@ -102,6 +134,7 @@ jobs:
           if (-not (Select-String -Quiet -Path Source/PluginEditor.h -Pattern 'FACE MOSAIC')) { throw 'Face Mosaic UI missing' }
           if (-not (Select-String -Quiet -Path Source/PluginEditor.cpp -Pattern 'SAVE USER PRESET')) { throw 'Preset UI missing' }
           if (-not (Select-String -Quiet -Path VisionEngine/vision_engine.py -Pattern 'set_face_mosaic')) { throw 'Vision command missing' }
+          if (-not (Select-String -Quiet -Path VisionEngine/GestureVisionEngine.spec -Pattern "models/haarcascade_frontalface_default.xml")) { throw 'Frozen face cascade resource missing' }
           if (-not (Test-Path 'build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3')) { throw 'VST3 binary missing' }
           if (-not (Test-Path 'build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe')) { throw 'Scanner missing' }
 
