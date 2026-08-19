@@ -1,0 +1,9 @@
+replace_once("Source/GestureMappingEngine.cpp",
+             "    for (int slotIndex = 0; slotIndex < RackGraphManager::slotCount; ++slotIndex)\n",
+             "    for (int slotIndex = 0; slotIndex < static_cast<int> (slots.size()); ++slotIndex)\n")
+
+mapping = Path("Source/GestureMappingEngine.cpp").read_text(encoding="utf-8")
+if "RackGraphManager::slotCount" in mapping:
+    raise RuntimeError("GestureMappingEngine.cpp still contains fixed slotCount references")
+
+print("dynamic-chain residual fixed-slot cleanup applied")
