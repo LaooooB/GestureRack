@@ -1,0 +1,51 @@
+name: Apply v0.4.1 In-Place Audio Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-v041-inplace-audio-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch hosted in-place audio path
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected exactly one match, got {count}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'CMakeLists.txt',
+              'project(GestureRack VERSION 0.4.0 LANGUAGES C CXX)',
+              'project(GestureRack VERSION 0.4.1 LANGUAGES C CXX)')
+
+          replace_once(
+              'Source/GestureBypassWrapper.cpp',
+              '''    copyAdapted (\n        hostMainInput, hostMainOutput, samples);\n\n    if (samples > scratchCapacitySamples)\n        return;\n\n    copyAdapted (\n        hostMainInput, dryBuffer, samples);''',
+              '''    // JUCE commonly presents the main input and output as views into the same\n    // in-place process buffer. Never clear/copy the output before preserving the\n    // input: copyAdapted() clears its destination first, so doing that on aliased\n    // input/output views erased the track before the hosted plug-in could process it.\n    if (samples > scratchCapacitySamples)\n        return;\n\n    // Preserve the untouched upstream signal first. Effects process the existing\n    // in-place main buffer; zero-input instruments ignore it and replace the main\n    // output from their own child buffer below. This copy also feeds latency-aligned\n    // dry/bypass mixing after the wet path has finished.\n    copyAdapted (\n        hostMainInput, dryBuffer, samples);''')
+
+      - name: Commit fix to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt Source/GestureBypassWrapper.cpp
+          git commit -m "Fix hosted plugin audio pass-through and bump v0.4.1"
+          git push origin HEAD:main
