@@ -7,11 +7,19 @@ juce::AudioProcessor::BusesProperties makeBridgeBuses (const juce::AudioChannelS
                                                        const juce::AudioChannelSet& sidechainSet,
                                                        const gr::HostedPluginCapabilities& capabilities)
 {
-    if (capabilities.sidechainInputBus >= 1 && ! sidechainSet.isDisabled())
+    if (capabilities.sidechainInputBus >= 1)
+    {
+        const auto bridgeSidechain = sidechainSet.isDisabled()
+            ? juce::AudioChannelSet::stereo() : sidechainSet;
         return juce::AudioProcessor::BusesProperties()
             .withInput ("Input", inputSet, true)
-            .withInput ("Sidechain", sidechainSet, true)
+            // Keep the bridge-side sidechain alive even when the outer DAW bus is
+            // currently disabled. It simply receives silence until RackGraphManager
+            // gets real sidechain channels, so enabling a DAW route later does not
+            // require reloading the hosted plug-in.
+            .withInput ("Sidechain", bridgeSidechain, true)
             .withOutput ("Output", outputSet, true);
+    }
 
     return juce::AudioProcessor::BusesProperties()
         .withInput ("Input", inputSet, true)
@@ -118,7 +126,9 @@ bool GestureBypassWrapper::configureChildForHosting (juce::AudioPluginInstance& 
 
     // A meta/rack effect may expose sidechains and many auxiliary outputs. Those buses
     // must not make the main stereo path fail. Disable them first, then selectively
-    // re-enable one sidechain input when the outer Gesture Rack sidechain is available.
+    // re-enable one usable secondary input. If the outer DAW sidechain is currently
+    // disabled we pre-negotiate stereo so a later DAW sidechain route can become live
+    // without recreating the hosted instance.
     capabilities.nonMainBusesDisabled = child.disableNonMainBuses();
 
     if (! configureMainBus (child, true, requestedMainInput)
@@ -137,37 +147,36 @@ bool GestureBypassWrapper::configureChildForHosting (juce::AudioPluginInstance& 
         return false;
     }
 
-    if (! hostSidechainLayout.isDisabled())
+    const auto preferredSidechain = hostSidechainLayout.isDisabled()
+        ? juce::AudioChannelSet::stereo() : hostSidechainLayout;
+    for (int busIndex = 1; busIndex < child.getBusCount (true); ++busIndex)
     {
-        for (int busIndex = 1; busIndex < child.getBusCount (true); ++busIndex)
+        auto* bus = child.getBus (true, busIndex);
+        if (bus == nullptr || ! bus->enable (true))
+            continue;
+
+        auto configured = child.setChannelLayoutOfBus (true, busIndex, preferredSidechain);
+        if (! configured)
         {
-            auto* bus = child.getBus (true, busIndex);
-            if (bus == nullptr || ! bus->enable (true))
-                continue;
-
-            auto configured = child.setChannelLayoutOfBus (true, busIndex, hostSidechainLayout);
+            auto current = child.getChannelLayoutOfBus (true, busIndex);
+            configured = isRackMainLayout (current);
             if (! configured)
-            {
-                auto current = child.getChannelLayoutOfBus (true, busIndex);
-                configured = isRackMainLayout (current);
-                if (! configured)
-                    for (const auto fallback : { juce::AudioChannelSet::stereo(), juce::AudioChannelSet::mono() })
-                        if (child.setChannelLayoutOfBus (true, busIndex, fallback))
-                        {
-                            configured = true;
-                            break;
-                        }
-            }
-
-            if (configured)
-            {
-                capabilities.sidechainInputBus = busIndex;
-                capabilities.sidechainInputChannels = child.getChannelCountOfBus (true, busIndex);
-                break;
-            }
-
-            bus->enable (false);
+                for (const auto fallback : { juce::AudioChannelSet::stereo(), juce::AudioChannelSet::mono() })
+                    if (child.setChannelLayoutOfBus (true, busIndex, fallback))
+                    {
+                        configured = true;
+                        break;
+                    }
         }
+
+        if (configured)
+        {
+            capabilities.sidechainInputBus = busIndex;
+            capabilities.sidechainInputChannels = child.getChannelCountOfBus (true, busIndex);
+            break;
+        }
+
+        bus->enable (false);
     }
 
     capabilities.auxiliaryOutputBusCount = juce::jmax (0, child.getBusCount (false) - 1);
