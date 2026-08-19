@@ -72,11 +72,15 @@ jobs:
           Copy-Item -Recurse -Force $vst3Source "$package/Gesture Rack.vst3"
           @(
             "Gesture Rack Windows VST3 Test Package",
+            "Version: 0.4.0",
             "Commit: $env:GITHUB_SHA",
             "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
+            "Plugin chain: dynamic/unbounded with one trailing add slot",
+            "Gesture selection: FX 1-10 only; FX 11+ mouse-only",
+            "Instruments: supported with MIDI-driven zero-input audio generation",
             "Hosted rack/meta effects: capability-negotiated buses",
-            "Sidechain: optional outer bus with hosted secondary-input bridge",
-            "MIDI: DAW input broadcast to MIDI-capable hosted effects"
+            "Audio bridge: direct in-place path for ordinary effects plus safe dry fallback",
+            "Sidechain: optional outer bus with hosted secondary-input bridge"
           ) | Set-Content -Encoding UTF8 "$package/VERSION.txt"
           if (-not (Test-Path $vst3Binary)) { throw "Gesture Rack VST3 binary missing" }
           if (-not (Test-Path $scannerBinary)) { throw "GestureRackScanner missing from VST3 bundle" }
