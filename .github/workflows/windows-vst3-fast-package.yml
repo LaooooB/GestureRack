@@ -10,6 +10,12 @@ on:
       - 'Source/**'
       - 'CMakeLists.txt'
       - '.github/workflows/windows-vst3-fast-package.yml'
+  pull_request:
+    paths:
+      - 'Source/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/windows-vst3-fast-package.yml'
+      - '.ci/fast-package-trigger.txt'
 
 permissions:
   contents: write
@@ -91,7 +97,7 @@ jobs:
           retention-days: 30
 
       - name: Publish package or failure logs
-        if: always()
+        if: always() && github.event_name == 'push'
         shell: pwsh
         run: |
           $publishDir = Join-Path $env:RUNNER_TEMP "gesturerack-ci-artifacts"
