@@ -14,6 +14,7 @@ constexpr int currentStateVersion = 6;
 GestureRackAudioProcessor::GestureRackAudioProcessor()
     : juce::AudioProcessor (BusesProperties()
                                 .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)
                                 .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       graphManager (graph, slots),
       mappingEngine (slots),
@@ -46,6 +47,7 @@ void GestureRackAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     hostBlockSize.store (samplesPerBlock, std::memory_order_relaxed);
 
     graph.setPlayConfigDetails (getTotalNumInputChannels(), getTotalNumOutputChannels(), sampleRate, samplesPerBlock);
+    graphManager.rebuildSerialConnections (juce::jmin (getMainBusNumInputChannels(), getMainBusNumOutputChannels()));
     graph.setPlayHead (getPlayHead());
     graph.prepareToPlay (sampleRate, samplesPerBlock);
 
@@ -69,7 +71,13 @@ bool GestureRackAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
 {
     const auto in = layouts.getMainInputChannelSet();
     const auto out = layouts.getMainOutputChannelSet();
-    return in == out && (in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo());
+    if (in != out || (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo()))
+        return false;
+
+    const auto sidechain = layouts.getChannelSet (true, 1);
+    return sidechain.isDisabled()
+        || sidechain == juce::AudioChannelSet::mono()
+        || sidechain == juce::AudioChannelSet::stereo();
 }
 
 void GestureRackAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -81,13 +89,14 @@ void GestureRackAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
 void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
+    auto mainOutput = getBusBuffer (buffer, false, 0);
     const auto latency = juce::jlimit (0, gr::RackGraphManager::maxRackLatencySamples - 1, getLatencySamples());
     hostBypassDelay.setDelay (static_cast<float> (latency));
-    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
-        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    for (int sample = 0; sample < mainOutput.getNumSamples(); ++sample)
+        for (int channel = 0; channel < mainOutput.getNumChannels(); ++channel)
         {
-            hostBypassDelay.pushSample (channel, buffer.getSample (channel, sample));
-            buffer.setSample (channel, sample, hostBypassDelay.popSample (channel));
+            hostBypassDelay.pushSample (channel, mainOutput.getSample (channel, sample));
+            mainOutput.setSample (channel, sample, hostBypassDelay.popSample (channel));
         }
 }
 
@@ -501,21 +510,44 @@ void GestureRackAudioProcessor::installChild (int slotIndex,
     auto& slot = *slots[index];
     if (slotLoadGenerations[index].load (std::memory_order_relaxed) != loadGeneration)
         return;
-    if (description.isInstrument || description.numInputChannels <= 0)
+    if (description.isInstrument)
     {
         slot.setLastError ("This build hosts audio effects, not instruments.");
         return;
     }
 
-    const auto layout = getBusesLayout();
-    if (! instance->setBusesLayout (layout))
+    const auto rackLayout = getBusesLayout();
+    const auto mainInput = rackLayout.getMainInputChannelSet();
+    const auto mainOutput = rackLayout.getMainOutputChannelSet();
+    auto hostSidechain = juce::AudioChannelSet::disabled();
+    if (getBusCount (true) > 1)
+        hostSidechain = getChannelLayoutOfBus (true, 1);
+
+    gr::HostedPluginCapabilities capabilities;
+    juce::String compatibilityError;
+    if (! gr::GestureBypassWrapper::configureChildForHosting (*instance, mainInput, mainOutput,
+                                                               hostSidechain, capabilities,
+                                                               compatibilityError))
     {
-        slot.setLastError ("The hosted plugin does not support the current mono/stereo bus layout.");
+        slot.setLastError ("HOST COMPATIBILITY: " + compatibilityError);
         return;
     }
+
     instance->setPlayHead (getPlayHead());
     if (restoredState != nullptr && restoredState->getSize() > 0)
         instance->setStateInformation (restoredState->getData(), static_cast<int> (restoredState->getSize()));
+
+    // A rack/meta plug-in can restore bus enablement from its own state. Re-negotiate
+    // after state restore so AUX buses never invalidate the main rack path and a usable
+    // sidechain is reattached when the outer host exposes one.
+    if (! gr::GestureBypassWrapper::configureChildForHosting (*instance, mainInput, mainOutput,
+                                                               hostSidechain, capabilities,
+                                                               compatibilityError))
+    {
+        slot.setLastError ("HOST STATE COMPATIBILITY: " + compatibilityError);
+        return;
+    }
+    instance->setPlayHead (getPlayHead());
 
     parameterLearnManager.cancelIfSlot (slotIndex);
     if (const auto& oldDescription = slot.getDescription(); oldDescription.has_value())
@@ -523,8 +555,9 @@ void GestureRackAudioProcessor::installChild (int slotIndex,
             mappingEngine.clearChildParameterMappings (slotIndex);
 
     auto wrapper = std::make_unique<gr::GestureBypassWrapper> (
-        std::move (instance), layout.getMainInputChannelSet(), layout.getMainOutputChannelSet(), slot.getBypassState());
-    const auto channels = juce::jmin (getTotalNumInputChannels(), getTotalNumOutputChannels());
+        std::move (instance), mainInput, mainOutput, hostSidechain,
+        capabilities, slot.getBypassState());
+    const auto channels = juce::jmin (getMainBusNumInputChannels(), getMainBusNumOutputChannels());
     if (graphManager.installSlotProcessor (slotIndex, std::move (wrapper), channels) == nullptr)
     {
         slot.setLastError ("Could not insert the hosted plugin into the rack graph.");

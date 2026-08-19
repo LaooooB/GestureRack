@@ -139,9 +139,11 @@ juce::String pluginCategoryName (PluginCategory category)
 
 bool pluginIsRackEffect (const juce::PluginDescription& plugin)
 {
+    // Scanner metadata is only a discovery hint. Some VST3 rack/meta effects report
+    // zero or incomplete channel counts until they are instantiated and their buses are
+    // negotiated by a host. Runtime capability negotiation is the authority now.
     return ! plugin.name.containsIgnoreCase ("Gesture Rack")
-        && ! plugin.isInstrument
-        && plugin.numInputChannels > 0;
+        && ! plugin.isInstrument;
 }
 
 PluginCategory classifyPlugin (const juce::PluginDescription& plugin)

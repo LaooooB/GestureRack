@@ -44,6 +44,8 @@ private:
     SlotArray& slots;
     juce::AudioProcessorGraph::Node::Ptr inputNode;
     juce::AudioProcessorGraph::Node::Ptr outputNode;
+    juce::AudioProcessorGraph::Node::Ptr midiInputNode;
+    juce::AudioProcessorGraph::Node::Ptr midiOutputNode;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RackGraphManager)
 };

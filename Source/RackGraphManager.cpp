@@ -24,6 +24,14 @@ void RackGraphManager::initialise (int numAudioChannels)
         std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor> (
             juce::AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode));
 
+    midiInputNode = graph.addNode (
+        std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor> (
+            juce::AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode));
+
+    midiOutputNode = graph.addNode (
+        std::make_unique<juce::AudioProcessorGraph::AudioGraphIOProcessor> (
+            juce::AudioProcessorGraph::AudioGraphIOProcessor::midiOutputNode));
+
     rebuildSerialConnections (numAudioChannels);
 }
 
@@ -32,6 +40,8 @@ void RackGraphManager::clear()
     graph.clear();
     inputNode = nullptr;
     outputNode = nullptr;
+    midiInputNode = nullptr;
+    midiOutputNode = nullptr;
 
     for (auto& slot : slots)
         if (slot != nullptr)
@@ -97,6 +107,10 @@ void RackGraphManager::rebuildSerialConnections (int numAudioChannels)
 
     graph.disconnectNode (inputNode->nodeID, juce::AudioProcessorGraph::UpdateKind::none);
     graph.disconnectNode (outputNode->nodeID, juce::AudioProcessorGraph::UpdateKind::none);
+    if (midiInputNode != nullptr)
+        graph.disconnectNode (midiInputNode->nodeID, juce::AudioProcessorGraph::UpdateKind::none);
+    if (midiOutputNode != nullptr)
+        graph.disconnectNode (midiOutputNode->nodeID, juce::AudioProcessorGraph::UpdateKind::none);
 
     for (const auto& slot : slots)
         if (slot != nullptr)
@@ -125,6 +139,68 @@ void RackGraphManager::rebuildSerialConnections (int numAudioChannels)
 
         graph.addConnection ({ { sourceNodeId, channel }, { outputNode->nodeID, channel } },
                              juce::AudioProcessorGraph::UpdateKind::none);
+    }
+
+    // The outer processor may expose an optional sidechain after the main input channels.
+    // Sidechain is never part of the serial wet path: it is fanned out from the rack input
+    // to every hosted bridge that actually exposes a secondary input bus.
+    const auto totalGraphInputChannels = inputNode->getProcessor()->getTotalNumOutputChannels();
+    const auto availableSidechainChannels = juce::jmax (0, totalGraphInputChannels - channels);
+    if (availableSidechainChannels > 0)
+    {
+        for (const auto& slot : slots)
+        {
+            if (slot == nullptr)
+                continue;
+            const auto node = slot->getGraphNode();
+            if (node == nullptr)
+                continue;
+
+            auto* processor = node->getProcessor();
+            if (processor == nullptr || processor->getBusCount (true) < 2)
+                continue;
+            auto* sidechainBus = processor->getBus (true, 1);
+            if (sidechainBus == nullptr || ! sidechainBus->isEnabled())
+                continue;
+
+            const auto sidechainChannels = juce::jmin (availableSidechainChannels,
+                                                        processor->getChannelCountOfBus (true, 1));
+            for (int channel = 0; channel < sidechainChannels; ++channel)
+            {
+                const auto destinationChannel = processor->getChannelIndexInProcessBlockBuffer (true, 1, channel);
+                if (destinationChannel < 0)
+                    continue;
+                graph.addConnection ({ { inputNode->nodeID, channels + channel },
+                                       { node->nodeID, destinationChannel } },
+                                     juce::AudioProcessorGraph::UpdateKind::none);
+            }
+        }
+    }
+
+    // Preserve the DAW MIDI stream unchanged while broadcasting it to every child that
+    // consumes MIDI. We intentionally do not merge child MIDI outputs here: many effects
+    // leave incoming events in their output buffer, which would duplicate notes if several
+    // rack slots were merged back together.
+    if (midiInputNode != nullptr && midiOutputNode != nullptr)
+    {
+        constexpr auto midiChannel = juce::AudioProcessorGraph::midiChannelIndex;
+        graph.addConnection ({ { midiInputNode->nodeID, midiChannel },
+                               { midiOutputNode->nodeID, midiChannel } },
+                             juce::AudioProcessorGraph::UpdateKind::none);
+
+        for (const auto& slot : slots)
+        {
+            if (slot == nullptr)
+                continue;
+            const auto node = slot->getGraphNode();
+            if (node == nullptr)
+                continue;
+            auto* processor = node->getProcessor();
+            if (processor != nullptr && processor->acceptsMidi())
+                graph.addConnection ({ { midiInputNode->nodeID, midiChannel },
+                                       { node->nodeID, midiChannel } },
+                                     juce::AudioProcessorGraph::UpdateKind::none);
+        }
     }
 
     graph.rebuild();
