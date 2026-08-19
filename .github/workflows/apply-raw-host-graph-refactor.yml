@@ -5,12 +5,15 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/apply-raw-host-graph-refactor.yml'
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   refactor-and-verify:
+    if: github.event_name == 'push' || github.event.issue.title == '[internal] Apply raw hosted graph refactor'
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
