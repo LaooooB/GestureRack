@@ -2,16 +2,24 @@
 
 namespace
 {
-juce::AudioProcessor::BusesProperties makeBridgeBuses (const juce::AudioChannelSet& inputSet,
-                                                       const juce::AudioChannelSet& outputSet,
-                                                       const juce::AudioChannelSet& sidechainSet,
-                                                       const gr::HostedPluginCapabilities& capabilities)
+// JUCE 8 keeps AudioProcessor::BusesProperties protected. Expose the type through
+// an abstract derived helper so the bridge factory can stay outside the processor
+// class without weakening JUCE headers or duplicating the constructor logic.
+struct AudioProcessorBusAccess : juce::AudioProcessor
+{
+    using BusesProperties = juce::AudioProcessor::BusesProperties;
+};
+
+AudioProcessorBusAccess::BusesProperties makeBridgeBuses (const juce::AudioChannelSet& inputSet,
+                                                           const juce::AudioChannelSet& outputSet,
+                                                           const juce::AudioChannelSet& sidechainSet,
+                                                           const gr::HostedPluginCapabilities& capabilities)
 {
     if (capabilities.sidechainInputBus >= 1)
     {
         const auto bridgeSidechain = sidechainSet.isDisabled()
             ? juce::AudioChannelSet::stereo() : sidechainSet;
-        return juce::AudioProcessor::BusesProperties()
+        return AudioProcessorBusAccess::BusesProperties()
             .withInput ("Input", inputSet, true)
             // Keep the bridge-side sidechain alive even when the outer DAW bus is
             // currently disabled. It simply receives silence until RackGraphManager
@@ -21,7 +29,7 @@ juce::AudioProcessor::BusesProperties makeBridgeBuses (const juce::AudioChannelS
             .withOutput ("Output", outputSet, true);
     }
 
-    return juce::AudioProcessor::BusesProperties()
+    return AudioProcessorBusAccess::BusesProperties()
         .withInput ("Input", inputSet, true)
         .withOutput ("Output", outputSet, true);
 }
