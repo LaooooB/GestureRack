@@ -43,6 +43,8 @@ jobs:
         run: |
           python tools/apply_raw_host_graph_refactor.py *>&1 | Tee-Object -FilePath host-refactor-ci.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/apply_raw_host_compile_fixes.py *>&1 | Tee-Object -FilePath host-refactor-ci.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Configure GestureRack
         shell: pwsh
@@ -89,6 +91,7 @@ jobs:
         shell: bash
         run: |
           rm -f tools/apply_raw_host_graph_refactor.py
+          rm -f tools/apply_raw_host_compile_fixes.py
           rm -f .github/workflows/apply-raw-host-graph-refactor.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
