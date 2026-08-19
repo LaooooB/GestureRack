@@ -1,0 +1,446 @@
+    auto& slot =
+        *slots[static_cast<size_t> (
+            targetSlotIndex)];
+
+    slot.clearAllMappings();
+
+    slot.setBypassed (
+        slotXml.getBoolAttribute (
+            "bypassed",
+            false));
+
+    if (stateVersion >= 3)
+        if (auto* mappingsXml =
+                slotXml.getChildByName (
+                    mappingsTag))
+            for (auto* bindingXml =
+                     mappingsXml
+                         ->getFirstChildElement();
+                 bindingXml != nullptr;
+                 bindingXml =
+                     bindingXml->getNextElement())
+                if (auto binding =
+                        gr::GestureBinding::fromXml (
+                            *bindingXml);
+                    binding.has_value())
+                {
+                    binding->slotIndex =
+                        targetSlotIndex;
+                    slot.addMapping (*binding);
+                }
+
+    if (stateVersion <= 3)
+        installDefaultMappingsForSlot (
+            targetSlotIndex);
+
+    auto descClone =
+        std::make_unique<juce::XmlElement> (
+            *descXml);
+
+    descClone->setTagName (
+        "PLUGIN");
+
+    juce::PluginDescription description;
+
+    if (! description.loadFromXml (
+            *descClone))
+    {
+        slot.setLastError (
+            "Could not restore the saved plug-in description.");
+        return;
+    }
+
+    auto restoredState =
+        std::make_shared<juce::MemoryBlock>();
+
+    if (auto* stateXml =
+            slotXml.getChildByName (
+                pluginStateTag))
+        restoredState->fromBase64Encoding (
+            stateXml->getAllSubText());
+
+    loadDescriptionAsync (
+        targetSlotIndex,
+        description,
+        restoredState);
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::restoreLegacySingleSlotState",
+                "void GestureRackAudioProcessor::setStateInformation",
+r'''void GestureRackAudioProcessor::restoreLegacySingleSlotState (
+    const juce::XmlElement& root)
+{
+    auto* descXml =
+        root.getChildByName (
+            descriptionTag);
+
+    if (descXml == nullptr)
+        return;
+
+    auto descClone =
+        std::make_unique<juce::XmlElement> (
+            *descXml);
+
+    descClone->setTagName (
+        "PLUGIN");
+
+    juce::PluginDescription description;
+
+    if (! description.loadFromXml (
+            *descClone))
+        return;
+
+    auto restoredState =
+        std::make_shared<juce::MemoryBlock>();
+
+    if (auto* stateXml =
+            root.getChildByName (
+                pluginStateTag))
+        restoredState->fromBase64Encoding (
+            stateXml->getAllSubText());
+
+    slots[0]->clearAllMappings();
+    installDefaultMappingsForSlot (0);
+
+    slots[0]->setBypassed (
+        root.getBoolAttribute (
+            "requestedBypass",
+            false));
+
+    loadDescriptionAsync (
+        0,
+        description,
+        restoredState);
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::setStateInformation",
+                "juce::AudioProcessorEditor* GestureRackAudioProcessor::createEditor()",
+r'''void GestureRackAudioProcessor::setStateInformation (
+    const void* data,
+    int sizeInBytes)
+{
+    auto xml =
+        getXmlFromBinary (
+            data,
+            sizeInBytes);
+
+    if (xml == nullptr
+        || ! xml->hasTagName (stateTag))
+        return;
+
+    auto stateCopy =
+        std::make_shared<juce::XmlElement> (
+            *xml);
+
+    auto alive = aliveFlag;
+
+    const auto restoreGeneration =
+        stateRestoreGeneration.fetch_add (
+            1,
+            std::memory_order_relaxed) + 1;
+
+    juce::MessageManager::callAsync (
+        [this,
+         alive,
+         stateCopy,
+         restoreGeneration]
+        {
+            if (! alive->load (
+                    std::memory_order_acquire)
+                || stateRestoreGeneration.load (
+                       std::memory_order_relaxed)
+                    != restoreGeneration)
+                return;
+
+            clearRackForStateRestore();
+
+            gestureEnabled.store (
+                stateCopy->getBoolAttribute (
+                    "gestureEnabled",
+                    true),
+                std::memory_order_relaxed);
+
+            const auto version =
+                stateCopy->getIntAttribute (
+                    "version",
+                    1);
+
+            if (version < 2)
+            {
+                restoreLegacySingleSlotState (
+                    *stateCopy);
+
+                rightRuntime.reset();
+                return;
+            }
+
+            std::vector<
+                const juce::XmlElement*>
+                savedSlots;
+
+            for (auto* slotXml =
+                     stateCopy
+                         ->getFirstChildElement();
+                 slotXml != nullptr;
+                 slotXml =
+                     slotXml->getNextElement())
+            {
+                if (slotXml->hasTagName (
+                        slotTag)
+                    && slotXml->getChildByName (
+                           descriptionTag)
+                        != nullptr)
+                    savedSlots.push_back (
+                        slotXml);
+            }
+
+            while (
+                static_cast<int> (slots.size())
+                < static_cast<int> (
+                      savedSlots.size()) + 1)
+                appendEmptySlot();
+
+            for (int index = 0;
+                 index < static_cast<int> (
+                             savedSlots.size());
+                 ++index)
+                restoreSlotFromXml (
+                    *savedSlots[
+                        static_cast<size_t> (
+                            index)],
+                    version,
+                    index);
+
+            const auto maxSelected =
+                savedSlots.empty()
+                    ? 0
+                    : static_cast<int> (
+                          savedSlots.size()) - 1;
+
+            selectedSlot.store (
+                juce::jlimit (
+                    0,
+                    maxSelected,
+                    stateCopy
+                        ->getIntAttribute (
+                            "selectedSlot",
+                            0)),
+                std::memory_order_relaxed);
+
+            if (version >= 4)
+            {
+                const auto armed =
+                    stateCopy
+                        ->getBoolAttribute (
+                            "rightControllerArmed",
+                            true);
+
+                const auto blocked =
+                    gr::controlGestureFromString (
+                        stateCopy
+                            ->getStringAttribute (
+                                "rightBlockedGesture",
+                                "Unknown"));
+
+                rightRuntime
+                    .restoreArmingState (
+                        armed,
+                        blocked);
+            }
+            else
+                rightRuntime.reset();
+        });
+}''')
+
+Path("Source/RackInteraction.cpp").write_text(r'''#include "PluginProcessor.h"
+
+void GestureRackAudioProcessor::loadPluginDescription (
+    int slotIndex,
+    const juce::PluginDescription& description)
+{
+    if (! isValidSlotIndex (slotIndex))
+        return;
+
+    auto& slot =
+        *slots[static_cast<size_t> (slotIndex)];
+
+    slot.clearLastError();
+
+    if (description.name.containsIgnoreCase (
+            "Gesture Rack"))
+    {
+        slot.setLastError (
+            "Gesture Rack cannot host itself.");
+        return;
+    }
+
+    slot.setLastError (
+        "LOADING "
+        + description.name
+        + "...");
+
+    parameterLearnManager.cancelIfSlot (
+        slotIndex);
+
+    mappingEngine.releaseAllActiveGestures();
+
+    if (slotIndex == getSelectedSlot())
+        testSignalEnabled.store (
+            false,
+            std::memory_order_relaxed);
+
+    loadDescriptionAsync (
+        slotIndex,
+        description,
+        nullptr);
+}
+
+bool GestureRackAudioProcessor::moveSlot (
+    int fromSlot,
+    int toSlot)
+{
+    const auto chainCount =
+        getChainSlotCount();
+
+    if (fromSlot < 0
+        || toSlot < 0
+        || fromSlot >= chainCount
+        || toSlot >= chainCount)
+        return false;
+
+    if (fromSlot == toSlot)
+        return true;
+
+    parameterLearnManager.cancel();
+    mappingEngine.releaseAllActiveGestures();
+
+    testSignalEnabled.store (
+        false,
+        std::memory_order_relaxed);
+
+    rightRuntime.disarmForSlotChange();
+
+    auto moved =
+        std::move (
+            slots[
+                static_cast<size_t> (
+                    fromSlot)]);
+
+    slots.erase (
+        slots.begin()
+        + fromSlot);
+
+    slots.insert (
+        slots.begin()
+        + toSlot,
+        std::move (moved));
+
+    reindexSlots();
+
+    auto newSelected =
+        getSelectedSlot();
+
+    if (newSelected == fromSlot)
+        newSelected = toSlot;
+    else if (fromSlot < toSlot
+             && newSelected > fromSlot
+             && newSelected <= toSlot)
+        --newSelected;
+    else if (fromSlot > toSlot
+             && newSelected >= toSlot
+             && newSelected < fromSlot)
+        ++newSelected;
+
+    selectedSlot.store (
+        juce::jlimit (
+            0,
+            getAddSlotIndex(),
+            newSelected),
+        std::memory_order_relaxed);
+
+    graphManager.rebuildSerialConnections (
+        juce::jmin (
+            getMainBusNumInputChannels(),
+            getMainBusNumOutputChannels()));
+
+    updateTotalLatency();
+    updateMappingStatus (
+        "RACK ORDER UPDATED");
+
+    return true;
+}
+''', encoding="utf-8")
+
+replace_once("Source/PluginEditor.h",
+             "#include <memory>\n",
+             "#include <memory>\n#include <vector>\n")
+
+replace_once("Source/PluginEditor.h",
+             "    bool keyPressed (const juce::KeyPress&) override;\n",
+             '''    bool keyPressed (const juce::KeyPress&) override;
+    void mouseWheelMove (const juce::MouseEvent&,
+                         const juce::MouseWheelDetails&) override;
+''')
+
+replace_once("Source/PluginEditor.h",
+             "    void updateSlotButtons();\n",
+             '''    void syncSlotButtons();
+    void updateSlotButtons();
+    void layoutPluginChain();
+''')
+
+replace_once("Source/PluginEditor.h",
+             '''    GestureRackAudioProcessor& processor;
+    std::array<RackSlotButton, GestureRackAudioProcessor::slotCount> slotButtons;''',
+             '''    GestureRackAudioProcessor& processor;
+    std::vector<std::unique_ptr<RackSlotButton>> slotButtons;
+    RackSlotButton addSlotButton;''')
+
+replace_once("Source/PluginEditor.h",
+             "    juce::Rectangle<int> pluginRailBounds;\n",
+             '''    juce::Rectangle<int> pluginRailBounds;
+    juce::Rectangle<int> pluginRailListBounds;
+    int chainScrollOffset = 0;
+''')
+
+replace_between("Source/PluginEditor.cpp",
+                "GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor",
+                "GestureRackAudioProcessorEditor::~GestureRackAudioProcessorEditor()",
+r'''GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (
+    GestureRackAudioProcessor& p)
+    : juce::AudioProcessorEditor (&p),
+      processor (p),
+      parameterInspector (p)
+{
+    setWantsKeyboardFocus (true);
+    setSize (
+        metrics::defaultEditorWidth,
+        metrics::defaultEditorHeight);
+
+    setResizable (true, true);
+
+    setResizeLimits (
+        metrics::minimumEditorWidth,
+        metrics::minimumEditorHeight,
+        3200,
+        2100);
+
+    addAndMakeVisible (
+        addSlotButton);
+
+    addSlotButton.bodyClick =
+        [this]
+        {
+            showPluginBrowserForSlot (
+                processor.getAddSlotIndex());
+        };
+
+    addSlotButton.setTooltip (
+        "Add plugin");
+
+    addAndMakeVisible (railSearchButton);
+    addAndMakeVisible (removeButton);
+    addAndMakeVisible (bypassButton);
+    addAndMakeVisible (pluginMoreButton);
