@@ -1,2 +1,2 @@
 Temporary PR-only marker used to expose the raw hosted graph refactor CI run. Do not merge this marker.
-Retry: migrate RackInteraction to bus-aware graph rebuild.
+Retry 2: scoped commit, serial MIDI, double precision, and raw bus-aware hosting.
