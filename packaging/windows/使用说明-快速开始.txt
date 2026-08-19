@@ -1,6 +1,6 @@
-Gesture Rack — Windows 快速开始
+Gesture Rack v0.6.0 — Windows 快速开始
 
-这个包不要求安装 Python。
+这是正式 Windows x64 发布包，不要求安装 Python。
 
 1. 安装 VST3
    把 VST3 文件夹里的 “Gesture Rack.vst3” 整个复制到：
@@ -13,6 +13,7 @@ Gesture Rack — Windows 快速开始
    GestureVisionEngine.exe
 
    第一次启动摄像头时请允许摄像头权限。保持这个程序运行。
+   正式包已经内置识别运行时与 MediaPipe 模型，不需要额外安装 Python 或单独下载模型。
 
 3. 在 DAW 里加载 Gesture Rack
    重新扫描 VST3，然后插入 “Gesture Rack”。
@@ -58,8 +59,9 @@ Gesture Rack — Windows 快速开始
 - 如果左右手角色反了，重新点 CALIBRATE RIGHT；也可以使用 SWAP L/R 手动切换。
 
 手势识别数据采集（可选，开发/优化识别准确率时使用）：
+- 正式包中工具位于：Tools\GestureDataCollector.exe。
 - 保持 GestureVisionEngine.exe 正常运行并先完成 CALIBRATE RIGHT。
-- 再双击 GestureDataCollector.exe。
+- 再双击 Tools\GestureDataCollector.exe。
 - 程序会依次让你录制：None hard-negative、Open Palm、Fist、Victory、Thumb Up、Thumb Down、Thumb Left、Thumb Right。
 - None 不代表“没有手”。请专门录半成型手势、Fist↔Thumb 过渡、半伸拇指、斜对角拇指、放松手、画面边缘和其他容易误触的姿势。
 - 每一轮请主动改变距离、手在画面中的位置、手腕角度和灯光。
