@@ -4,15 +4,16 @@
 #include <atomic>
 #include <optional>
 #include <vector>
-#include "GestureBypassWrapper.h"
+#include "HostedPluginTopology.h"
 #include "GestureBinding.h"
 
 namespace gr
 {
-class PluginSlot final
+class PluginSlot final : private juce::AudioProcessorListener
 {
 public:
     explicit PluginSlot (int indexToUse) noexcept;
+    ~PluginSlot() override;
 
     int getIndex() const noexcept { return slotIndex; }
     void setIndexForReorder (int newIndex);
@@ -31,30 +32,29 @@ public:
         return loadGeneration.load (std::memory_order_relaxed) == generation;
     }
 
-    bool hasPlugin() const noexcept { return graphNode != nullptr && description.has_value(); }
+    bool hasPlugin() const noexcept { return getChild() != nullptr && description.has_value(); }
     bool isBypassed() const noexcept { return requestedBypass.load (std::memory_order_relaxed); }
-    void setBypassed (bool shouldBypass) noexcept
-    {
-        requestedBypass.store (shouldBypass, std::memory_order_relaxed);
-    }
+    void setBypassed (bool shouldBypass) noexcept;
 
     juce::String getPluginName() const;
     const std::optional<juce::PluginDescription>& getDescription() const noexcept { return description; }
     void setDescription (const juce::PluginDescription& newDescription) { description = newDescription; }
     void clearDescription() { description.reset(); }
 
-    void setGraphNode (juce::AudioProcessorGraph::Node::Ptr newNode) { graphNode = std::move (newNode); }
-    void clearGraphNode() { graphNode = nullptr; }
+    void setGraphNode (juce::AudioProcessorGraph::Node::Ptr newNode);
+    void clearGraphNode();
     juce::AudioProcessorGraph::Node::Ptr getGraphNode() const noexcept { return graphNode; }
 
-    GestureBypassWrapper* getWrapper() const noexcept;
     juce::AudioPluginInstance* getChild() const noexcept;
+    juce::AudioProcessorEditor* getOrCreateEmbeddedEditor();
+    void releaseEmbeddedEditor();
+
+    bool pollTopologyChanged();
+    const HostedPluginTopology& getTopologySnapshot() const noexcept { return topologySnapshot; }
 
     juce::String getLastError() const { return lastError; }
     void setLastError (juce::String error) { lastError = std::move (error); }
     void clearLastError() { lastError.clear(); }
-
-    std::atomic<bool>& getBypassState() noexcept { return requestedBypass; }
 
     std::vector<GestureBinding> getMappings() const;
     void addMapping (const GestureBinding& binding);
@@ -65,6 +65,10 @@ public:
     int getMappingCount (ControlGesture gesture) const;
 
 private:
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged (juce::AudioProcessor*, const juce::AudioProcessorListener::ChangeDetails&) override;
+    void detachFromCurrentProcessor();
+
     static std::atomic<uint64_t> nextStableId;
 
     int slotIndex = 0;
@@ -73,6 +77,9 @@ private:
     std::optional<juce::PluginDescription> description;
     juce::AudioProcessorGraph::Node::Ptr graphNode;
     std::atomic<bool> requestedBypass { false };
+    std::atomic<bool> topologyDirty { true };
+    HostedPluginTopology topologySnapshot;
+    std::unique_ptr<juce::AudioProcessorEditor> embeddedEditor;
     juce::String lastError;
 
     mutable juce::SpinLock mappingsLock;

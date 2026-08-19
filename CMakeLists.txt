@@ -133,8 +133,7 @@ target_sources(GestureRack PRIVATE
     Source/VisionReceiver.cpp
     Source/VisionFrameReader.h
     Source/VisionFrameReader.cpp
-    Source/GestureBypassWrapper.h
-    Source/GestureBypassWrapper.cpp
+    Source/HostedPluginTopology.h
     Source/PluginSlot.h
     Source/PluginSlot.cpp
     Source/RackGraphManager.h

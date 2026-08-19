@@ -8,14 +8,22 @@ constexpr auto slotTag = "SLOT";
 constexpr auto descriptionTag = "PLUGIN_DESCRIPTION";
 constexpr auto pluginStateTag = "PLUGIN_STATE";
 constexpr auto mappingsTag = "MAPPINGS";
-constexpr int currentStateVersion = 7;
+constexpr int currentStateVersion = 8;
 }
 
 GestureRackAudioProcessor::GestureRackAudioProcessor()
     : juce::AudioProcessor (BusesProperties()
                                 .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                                 .withInput ("Sidechain", juce::AudioChannelSet::stereo(), false)
-                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                .withOutput ("Aux 1", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 2", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 3", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 4", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 5", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 6", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 7", juce::AudioChannelSet::stereo(), false)
+                                .withOutput ("Aux 8", juce::AudioChannelSet::stereo(), false)),
       graphManager (graph, slots),
       mappingEngine (slots),
       parameterLearnManager (mappingEngine)
@@ -23,10 +31,7 @@ GestureRackAudioProcessor::GestureRackAudioProcessor()
     appendEmptySlot();
 
     juce::addDefaultFormatsToManager (formatManager);
-    graphManager.initialise (
-        juce::jmin (
-            getTotalNumInputChannels(),
-            getTotalNumOutputChannels()));
+    graphManager.initialise (buildHostBusLayout());
     startTimerHz (100);
 }
 
@@ -94,9 +99,12 @@ void GestureRackAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     hostSampleRate.store (sampleRate, std::memory_order_relaxed);
     hostBlockSize.store (samplesPerBlock, std::memory_order_relaxed);
 
-    graph.setPlayConfigDetails (getTotalNumInputChannels(), getTotalNumOutputChannels(), sampleRate, samplesPerBlock);
-    graphManager.rebuildSerialConnections (juce::jmin (getMainBusNumInputChannels(), getMainBusNumOutputChannels()));
+    graph.setPlayConfigDetails (getTotalNumInputChannels(), getTotalNumOutputChannels(),
+                                sampleRate, samplesPerBlock);
     graph.setPlayHead (getPlayHead());
+    graph.setProcessingPrecision (getProcessingPrecision());
+    graph.setNonRealtime (isNonRealtime());
+    graphManager.rebuildRouting (buildHostBusLayout());
     graph.prepareToPlay (sampleRate, samplesPerBlock);
 
     juce::dsp::ProcessSpec spec { sampleRate,
@@ -104,6 +112,8 @@ void GestureRackAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
                                  static_cast<juce::uint32> (juce::jmax (1, getTotalNumOutputChannels())) };
     hostBypassDelay.prepare (spec);
     hostBypassDelay.reset();
+    hostBypassDelayDouble.prepare (spec);
+    hostBypassDelayDouble.reset();
     updateTotalLatency();
 }
 
@@ -113,6 +123,7 @@ void GestureRackAudioProcessor::releaseResources()
     mappingEngine.releaseAllActiveGestures();
     graph.releaseResources();
     hostBypassDelay.reset();
+    hostBypassDelayDouble.reset();
 }
 
 bool GestureRackAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -122,13 +133,35 @@ bool GestureRackAudioProcessor::isBusesLayoutSupported (const BusesLayout& layou
     if (in != out || (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo()))
         return false;
 
-    const auto sidechain = layouts.getChannelSet (true, 1);
-    return sidechain.isDisabled()
-        || sidechain == juce::AudioChannelSet::mono()
-        || sidechain == juce::AudioChannelSet::stereo();
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto sidechain = layouts.getChannelSet (true, 1);
+        if (! sidechain.isDisabled()
+            && sidechain != juce::AudioChannelSet::mono()
+            && sidechain != juce::AudioChannelSet::stereo())
+            return false;
+    }
+
+    for (int busIndex = 1; busIndex < layouts.outputBuses.size(); ++busIndex)
+    {
+        const auto aux = layouts.getChannelSet (false, busIndex);
+        if (! aux.isDisabled()
+            && aux != juce::AudioChannelSet::mono()
+            && aux != juce::AudioChannelSet::stereo())
+            return false;
+    }
+
+    return true;
 }
 
 void GestureRackAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ScopedNoDenormals noDenormals;
+    graph.setPlayHead (getPlayHead());
+    graph.processBlock (buffer, midi);
+}
+
+void GestureRackAudioProcessor::processBlock (juce::AudioBuffer<double>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     graph.setPlayHead (getPlayHead());
@@ -148,9 +181,28 @@ void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& 
         }
 }
 
+void GestureRackAudioProcessor::processBlockBypassed (juce::AudioBuffer<double>& buffer, juce::MidiBuffer&)
+{
+    auto mainOutput = getBusBuffer (buffer, false, 0);
+    const auto latency = juce::jlimit (0, gr::RackGraphManager::maxRackLatencySamples - 1, getLatencySamples());
+    hostBypassDelayDouble.setDelay (static_cast<double> (latency));
+    for (int sample = 0; sample < mainOutput.getNumSamples(); ++sample)
+        for (int channel = 0; channel < mainOutput.getNumChannels(); ++channel)
+        {
+            hostBypassDelayDouble.pushSample (channel, mainOutput.getSample (channel, sample));
+            mainOutput.setSample (channel, sample, hostBypassDelayDouble.popSample (channel));
+        }
+}
+
 void GestureRackAudioProcessor::timerCallback()
 {
     constexpr auto controlDeltaSeconds = 1.0f / 100.0f;
+
+    // I/O and latency mutations are legal host events, not safety failures.
+    // Service them on the message thread and atomically hand JUCE a rebuilt
+    // render sequence instead of touching plug-in lifecycle from audio.
+    if (graphManager.serviceDynamicChanges (buildHostBusLayout()))
+        updateTotalLatency();
     const auto snapshot = vision.getDualHandSnapshot();
     const auto connected = vision.isConnected();
     const auto packetAgeMs = snapshot.receivedAtMs > 0
@@ -313,17 +365,15 @@ juce::AudioProcessorEditor* GestureRackAudioProcessor::getOrCreateSlotEditor (in
 {
     if (! isValidSlotIndex (slotIndex))
         return nullptr;
-    if (auto* wrapper = slots[static_cast<size_t> (slotIndex)]->getWrapper())
-        return wrapper->getOrCreateEmbeddedEditor();
-    return nullptr;
+    return slots[static_cast<size_t> (slotIndex)]->getOrCreateEmbeddedEditor();
 }
 
 bool GestureRackAudioProcessor::slotHasNativeEditor (int slotIndex) const noexcept
 {
     if (! isValidSlotIndex (slotIndex))
         return false;
-    if (auto* wrapper = slots[static_cast<size_t> (slotIndex)]->getWrapper())
-        return wrapper->hasChildEditor();
+    if (auto* child = slots[static_cast<size_t> (slotIndex)]->getChild())
+        return child->hasEditor();
     return false;
 }
 
@@ -628,7 +678,7 @@ void GestureRackAudioProcessor::loadDescriptionAsync (
         getSampleRate() > 0.0
             ? getSampleRate()
             : 44100.0;
-    const auto blockSize =
+    const auto instanceBlockSize =
         getBlockSize() > 0
             ? getBlockSize()
             : 512;
@@ -638,7 +688,7 @@ void GestureRackAudioProcessor::loadDescriptionAsync (
     formatManager.createPluginInstanceAsync (
         description,
         sampleRate,
-        blockSize,
+        instanceBlockSize,
         [this, alive, stableId, generation,
          description, restoredState]
         (std::unique_ptr<juce::AudioPluginInstance> instance,
@@ -688,129 +738,61 @@ void GestureRackAudioProcessor::installChild (
     const juce::PluginDescription& description,
     const juce::MemoryBlock* restoredState)
 {
-    if (! isValidSlotIndex (slotIndex))
+    if (! isValidSlotIndex (slotIndex) || instance == nullptr)
         return;
 
-    const auto stableId =
-        slots[static_cast<size_t> (slotIndex)]
-            ->getStableId();
-
-    auto& slot =
-        *slots[static_cast<size_t> (slotIndex)];
-
-    if (! slot.isLoadGenerationCurrent (
-            loadGeneration))
+    const auto stableId = slots[static_cast<size_t> (slotIndex)]->getStableId();
+    auto& slot = *slots[static_cast<size_t> (slotIndex)];
+    if (! slot.isLoadGenerationCurrent (loadGeneration))
         return;
 
-    const auto rackLayout =
-        getBusesLayout();
-    const auto mainInput =
-        rackLayout.getMainInputChannelSet();
-    const auto mainOutput =
-        rackLayout.getMainOutputChannelSet();
-
-    auto hostSidechain =
-        juce::AudioChannelSet::disabled();
-
-    if (getBusCount (true) > 1)
-        hostSidechain =
-            getChannelLayoutOfBus (true, 1);
-
-    gr::HostedPluginCapabilities capabilities;
+    const auto hostLayout = buildHostBusLayout();
     juce::String compatibilityError;
-
-    if (! gr::GestureBypassWrapper::configureChildForHosting (
-            *instance,
-            mainInput,
-            mainOutput,
-            hostSidechain,
-            description.isInstrument,
-            capabilities,
-            compatibilityError))
+    if (! gr::configureHostedPluginForRack (*instance, hostLayout,
+                                            description.isInstrument, compatibilityError))
     {
-        slot.setLastError (
-            "HOST COMPATIBILITY: "
-            + compatibilityError);
+        slot.setLastError ("HOST COMPATIBILITY: " + compatibilityError);
         return;
     }
 
     instance->setPlayHead (getPlayHead());
 
-    if (restoredState != nullptr
-        && restoredState->getSize() > 0)
-        instance->setStateInformation (
-            restoredState->getData(),
-            static_cast<int> (
-                restoredState->getSize()));
+    if (restoredState != nullptr && restoredState->getSize() > 0)
+        instance->setStateInformation (restoredState->getData(),
+                                       static_cast<int> (restoredState->getSize()));
 
-    if (! gr::GestureBypassWrapper::configureChildForHosting (
-            *instance,
-            mainInput,
-            mainOutput,
-            hostSidechain,
-            description.isInstrument,
-            capabilities,
-            compatibilityError))
+    // State restore may legitimately change active buses. Re-negotiate only
+    // rack endpoints; never disable child AUX/sidechain buses globally.
+    if (! gr::configureHostedPluginForRack (*instance, hostLayout,
+                                            description.isInstrument, compatibilityError))
     {
-        slot.setLastError (
-            "HOST STATE COMPATIBILITY: "
-            + compatibilityError);
+        slot.setLastError ("HOST STATE COMPATIBILITY: " + compatibilityError);
         return;
     }
 
     instance->setPlayHead (getPlayHead());
 
-    const auto currentIndex =
-        findSlotIndexByStableId (stableId);
-
+    const auto currentIndex = findSlotIndexByStableId (stableId);
     if (! isValidSlotIndex (currentIndex))
         return;
 
-    auto& currentSlot =
-        *slots[static_cast<size_t> (currentIndex)];
-
-    if (! currentSlot.isLoadGenerationCurrent (
-            loadGeneration))
+    auto& currentSlot = *slots[static_cast<size_t> (currentIndex)];
+    if (! currentSlot.isLoadGenerationCurrent (loadGeneration))
         return;
 
-    parameterLearnManager.cancelIfSlot (
-        currentIndex);
+    parameterLearnManager.cancelIfSlot (currentIndex);
+    if (const auto& oldDescription = currentSlot.getDescription(); oldDescription.has_value())
+        if (! oldDescription->matchesIdentifierString (description.createIdentifierString()))
+            mappingEngine.clearChildParameterMappings (currentIndex);
 
-    if (const auto& oldDescription =
-            currentSlot.getDescription();
-        oldDescription.has_value())
-        if (! oldDescription->matchesIdentifierString (
-                description.createIdentifierString()))
-            mappingEngine.clearChildParameterMappings (
-                currentIndex);
-
-    auto wrapper =
-        std::make_unique<gr::GestureBypassWrapper> (
-            std::move (instance),
-            mainInput,
-            mainOutput,
-            hostSidechain,
-            capabilities,
-            currentSlot.getBypassState());
-
-    const auto channels =
-        juce::jmin (
-            getMainBusNumInputChannels(),
-            getMainBusNumOutputChannels());
-
-    if (graphManager.installSlotProcessor (
-            currentIndex,
-            std::move (wrapper),
-            channels) == nullptr)
+    if (graphManager.installSlotProcessor (currentIndex, std::move (instance), hostLayout) == nullptr)
     {
-        currentSlot.setLastError (
-            "GRAPH INSERT: Could not insert the hosted plug-in into the rack.");
+        currentSlot.setLastError ("GRAPH INSERT: Could not insert the hosted plug-in into the rack.");
         return;
     }
 
     currentSlot.setDescription (description);
     currentSlot.clearLastError();
-
     ensureTrailingEmptySlot();
     updateTotalLatency();
 }
@@ -834,11 +816,7 @@ void GestureRackAudioProcessor::removeSlotPlugin (
 
     slot.invalidatePendingLoads();
 
-    graphManager.removeSlotProcessor (
-        slotIndex,
-        juce::jmin (
-            getMainBusNumInputChannels(),
-            getMainBusNumOutputChannels()));
+    graphManager.removeSlotProcessor (slotIndex, buildHostBusLayout());
 
     mappingEngine.clearChildParameterMappings (
         slotIndex);
@@ -883,12 +861,30 @@ void GestureRackAudioProcessor::removeSlotPlugin (
 
     rightRuntime.disarmForSlotChange();
 
-    graphManager.rebuildSerialConnections (
-        juce::jmin (
-            getMainBusNumInputChannels(),
-            getMainBusNumOutputChannels()));
+    graphManager.rebuildRouting (buildHostBusLayout());
 
     updateTotalLatency();
+}
+
+gr::RackHostBusLayout GestureRackAudioProcessor::buildHostBusLayout() const
+{
+    gr::RackHostBusLayout layout;
+    layout.mainInput = getChannelLayoutOfBus (true, 0);
+    layout.mainOutput = getChannelLayoutOfBus (false, 0);
+
+    if (getBusCount (true) > 1)
+        if (auto* sidechain = getBus (true, 1); sidechain != nullptr && sidechain->isEnabled())
+            layout.sidechainInput = getChannelLayoutOfBus (true, 1);
+
+    for (int busIndex = 1; busIndex < getBusCount (false); ++busIndex)
+    {
+        auto set = juce::AudioChannelSet::disabled();
+        if (auto* bus = getBus (false, busIndex); bus != nullptr && bus->isEnabled())
+            set = getChannelLayoutOfBus (false, busIndex);
+        layout.auxOutputs.push_back (set);
+    }
+
+    return layout;
 }
 
 void GestureRackAudioProcessor::updateTotalLatency()
@@ -1009,10 +1005,7 @@ void GestureRackAudioProcessor::clearRackForStateRestore()
         if (slot != nullptr)
             slot->invalidatePendingLoads();
 
-    graphManager.removeAllSlotProcessors (
-        juce::jmin (
-            getMainBusNumInputChannels(),
-            getMainBusNumOutputChannels()));
+    graphManager.removeAllSlotProcessors (buildHostBusLayout());
 
     slots.clear();
     appendEmptySlot();

@@ -27,7 +27,10 @@ public:
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlock (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlockBypassed (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
+    bool supportsDoublePrecisionProcessing() const override { return true; }
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -210,6 +213,7 @@ private:
     void restoreLegacySingleSlotState (const juce::XmlElement& root);
     void installDefaultMappingsForSlot (int slotIndex);
     void installDefaultMappingsForAllSlots();
+    gr::RackHostBusLayout buildHostBusLayout() const;
     void updateTotalLatency();
     void updateMappingStatus (const juce::String& text);
     std::optional<juce::PluginDescription> findCatalogDescriptionForFile (const juce::File& file) const;
@@ -241,6 +245,8 @@ private:
     std::atomic<double> hostSampleRate { 0.0 };
     std::atomic<int> hostBlockSize { 0 };
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> hostBypassDelay
+        { gr::RackGraphManager::maxRackLatencySamples };
+    juce::dsp::DelayLine<double, juce::dsp::DelayLineInterpolationTypes::Linear> hostBypassDelayDouble
         { gr::RackGraphManager::maxRackLatencySamples };
     bool prepared = false;
 

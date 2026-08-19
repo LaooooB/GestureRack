@@ -28,6 +28,11 @@ PluginSlot::PluginSlot (int indexToUse) noexcept
 {
 }
 
+PluginSlot::~PluginSlot()
+{
+    detachFromCurrentProcessor();
+}
+
 void PluginSlot::setIndexForReorder (int newIndex)
 {
     const juce::SpinLock::ScopedLockType lock (mappingsLock);
@@ -41,20 +46,101 @@ juce::String PluginSlot::getPluginName() const
     return description.has_value() ? description->name : "EMPTY";
 }
 
-GestureBypassWrapper* PluginSlot::getWrapper() const noexcept
+juce::AudioPluginInstance* PluginSlot::getChild() const noexcept
 {
     if (graphNode == nullptr)
         return nullptr;
 
-    return dynamic_cast<GestureBypassWrapper*> (graphNode->getProcessor());
+    return dynamic_cast<juce::AudioPluginInstance*> (graphNode->getProcessor());
 }
 
-juce::AudioPluginInstance* PluginSlot::getChild() const noexcept
+void PluginSlot::detachFromCurrentProcessor()
 {
-    if (auto* wrapper = getWrapper())
-        return wrapper->getChild();
+    releaseEmbeddedEditor();
+    if (auto* child = getChild())
+        child->removeListener (this);
+}
 
-    return nullptr;
+void PluginSlot::setGraphNode (juce::AudioProcessorGraph::Node::Ptr newNode)
+{
+    detachFromCurrentProcessor();
+    graphNode = std::move (newNode);
+    topologySnapshot = {};
+    topologyDirty.store (true, std::memory_order_release);
+
+    if (auto* child = getChild())
+    {
+        child->addListener (this);
+        topologySnapshot = captureHostedPluginTopology (*child);
+        topologyDirty.store (false, std::memory_order_release);
+        graphNode->setBypassed (requestedBypass.load (std::memory_order_relaxed));
+    }
+}
+
+void PluginSlot::clearGraphNode()
+{
+    detachFromCurrentProcessor();
+    graphNode = nullptr;
+    topologySnapshot = {};
+    topologyDirty.store (true, std::memory_order_release);
+}
+
+void PluginSlot::setBypassed (bool shouldBypass) noexcept
+{
+    requestedBypass.store (shouldBypass, std::memory_order_relaxed);
+    if (graphNode != nullptr)
+        graphNode->setBypassed (shouldBypass);
+}
+
+juce::AudioProcessorEditor* PluginSlot::getOrCreateEmbeddedEditor()
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    auto* child = getChild();
+    if (child == nullptr || ! child->hasEditor())
+        return nullptr;
+
+    if (embeddedEditor == nullptr)
+        embeddedEditor.reset (child->createEditorAndMakeActive());
+
+    return embeddedEditor.get();
+}
+
+void PluginSlot::releaseEmbeddedEditor()
+{
+    if (embeddedEditor != nullptr)
+    {
+        jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+        embeddedEditor.reset();
+    }
+}
+
+void PluginSlot::audioProcessorChanged (
+    juce::AudioProcessor*,
+    const juce::AudioProcessorListener::ChangeDetails&)
+{
+    // VST3 restartComponent notifications are surfaced through AudioProcessor
+    // change notifications, but not every plug-in reports every I/O mutation.
+    // The message-thread poll below is therefore authoritative; this flag only
+    // makes notified changes cheap to detect.
+    topologyDirty.store (true, std::memory_order_release);
+}
+
+bool PluginSlot::pollTopologyChanged()
+{
+    auto* child = getChild();
+    if (child == nullptr)
+        return false;
+
+    const auto current = captureHostedPluginTopology (*child);
+    const auto dirty = topologyDirty.exchange (false, std::memory_order_acq_rel);
+    if (dirty || current != topologySnapshot)
+    {
+        const auto changed = current != topologySnapshot;
+        topologySnapshot = current;
+        return changed;
+    }
+
+    return false;
 }
 
 std::vector<GestureBinding> PluginSlot::getMappings() const
@@ -66,23 +152,16 @@ std::vector<GestureBinding> PluginSlot::getMappings() const
 void PluginSlot::addMapping (const GestureBinding& binding)
 {
     const juce::SpinLock::ScopedLockType lock (mappingsLock);
-
-    // A parameter has exactly one gesture owner. A gesture may still fan out to
-    // any number of different parameters. Replacing the gesture on an already
-    // mapped parameter therefore removes only that parameter's previous binding;
-    // sibling parameters driven by the same gesture are untouched.
     std::erase_if (mappings, [&binding] (const GestureBinding& existing)
     {
         return existing.id == binding.id || sameParameterTarget (existing, binding);
     });
-
     mappings.push_back (binding);
 }
 
 bool PluginSlot::updateMapping (const GestureBinding& binding)
 {
     const juce::SpinLock::ScopedLockType lock (mappingsLock);
-
     const auto original = std::find_if (mappings.begin(), mappings.end(), [&binding] (const GestureBinding& existing)
     {
         return existing.id == binding.id;
@@ -90,8 +169,6 @@ bool PluginSlot::updateMapping (const GestureBinding& binding)
     if (original == mappings.end())
         return false;
 
-    // Keep the one-parameter/one-gesture invariant even when mappings are
-    // restored through undo/state migration or edited by future UI code.
     std::erase_if (mappings, [&binding] (const GestureBinding& existing)
     {
         return existing.id != binding.id && sameParameterTarget (existing, binding);

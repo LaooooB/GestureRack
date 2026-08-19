@@ -104,10 +104,7 @@ bool GestureRackAudioProcessor::moveSlot (
             newSelected),
         std::memory_order_relaxed);
 
-    graphManager.rebuildSerialConnections (
-        juce::jmin (
-            getMainBusNumInputChannels(),
-            getMainBusNumOutputChannels()));
+    graphManager.rebuildRouting (buildHostBusLayout());
 
     updateTotalLatency();
     updateMappingStatus (
