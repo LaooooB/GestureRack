@@ -1,0 +1,443 @@
+    for (int slotIndex = 0;
+         slotIndex < static_cast<int> (slots.size());
+         ++slotIndex)
+        installDefaultMappingsForSlot (slotIndex);
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::loadDescriptionAsync",
+                "void GestureRackAudioProcessor::installChild",
+r'''void GestureRackAudioProcessor::loadDescriptionAsync (
+    int slotIndex,
+    juce::PluginDescription description,
+    std::shared_ptr<juce::MemoryBlock> restoredState)
+{
+    if (! isValidSlotIndex (slotIndex))
+        return;
+
+    auto& slot =
+        *slots[static_cast<size_t> (slotIndex)];
+
+    const auto stableId =
+        slot.getStableId();
+    const auto generation =
+        slot.beginLoad();
+    const auto sampleRate =
+        getSampleRate() > 0.0
+            ? getSampleRate()
+            : 44100.0;
+    const auto blockSize =
+        getBlockSize() > 0
+            ? getBlockSize()
+            : 512;
+
+    auto alive = aliveFlag;
+
+    formatManager.createPluginInstanceAsync (
+        description,
+        sampleRate,
+        blockSize,
+        [this, alive, stableId, generation,
+         description, restoredState]
+        (std::unique_ptr<juce::AudioPluginInstance> instance,
+         const juce::String& error)
+        {
+            if (! alive->load (
+                    std::memory_order_acquire))
+                return;
+
+            const auto currentIndex =
+                findSlotIndexByStableId (stableId);
+
+            if (! isValidSlotIndex (currentIndex))
+                return;
+
+            auto& currentSlot =
+                *slots[static_cast<size_t> (currentIndex)];
+
+            if (! currentSlot.isLoadGenerationCurrent (
+                    generation))
+                return;
+
+            if (instance == nullptr)
+            {
+                currentSlot.setLastError (
+                    error.isNotEmpty()
+                        ? "CREATE INSTANCE: " + error
+                        : "CREATE INSTANCE: Could not create the hosted plug-in.");
+                return;
+            }
+
+            installChild (
+                currentIndex,
+                generation,
+                std::move (instance),
+                description,
+                restoredState != nullptr
+                    ? restoredState.get()
+                    : nullptr);
+        });
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::installChild",
+                "void GestureRackAudioProcessor::removeSlotPlugin",
+r'''void GestureRackAudioProcessor::installChild (
+    int slotIndex,
+    uint64_t loadGeneration,
+    std::unique_ptr<juce::AudioPluginInstance> instance,
+    const juce::PluginDescription& description,
+    const juce::MemoryBlock* restoredState)
+{
+    if (! isValidSlotIndex (slotIndex))
+        return;
+
+    const auto stableId =
+        slots[static_cast<size_t> (slotIndex)]
+            ->getStableId();
+
+    auto& slot =
+        *slots[static_cast<size_t> (slotIndex)];
+
+    if (! slot.isLoadGenerationCurrent (
+            loadGeneration))
+        return;
+
+    const auto rackLayout =
+        getBusesLayout();
+    const auto mainInput =
+        rackLayout.getMainInputChannelSet();
+    const auto mainOutput =
+        rackLayout.getMainOutputChannelSet();
+
+    auto hostSidechain =
+        juce::AudioChannelSet::disabled();
+
+    if (getBusCount (true) > 1)
+        hostSidechain =
+            getChannelLayoutOfBus (true, 1);
+
+    gr::HostedPluginCapabilities capabilities;
+    juce::String compatibilityError;
+
+    if (! gr::GestureBypassWrapper::configureChildForHosting (
+            *instance,
+            mainInput,
+            mainOutput,
+            hostSidechain,
+            description.isInstrument,
+            capabilities,
+            compatibilityError))
+    {
+        slot.setLastError (
+            "HOST COMPATIBILITY: "
+            + compatibilityError);
+        return;
+    }
+
+    instance->setPlayHead (getPlayHead());
+
+    if (restoredState != nullptr
+        && restoredState->getSize() > 0)
+        instance->setStateInformation (
+            restoredState->getData(),
+            static_cast<int> (
+                restoredState->getSize()));
+
+    if (! gr::GestureBypassWrapper::configureChildForHosting (
+            *instance,
+            mainInput,
+            mainOutput,
+            hostSidechain,
+            description.isInstrument,
+            capabilities,
+            compatibilityError))
+    {
+        slot.setLastError (
+            "HOST STATE COMPATIBILITY: "
+            + compatibilityError);
+        return;
+    }
+
+    instance->setPlayHead (getPlayHead());
+
+    const auto currentIndex =
+        findSlotIndexByStableId (stableId);
+
+    if (! isValidSlotIndex (currentIndex))
+        return;
+
+    auto& currentSlot =
+        *slots[static_cast<size_t> (currentIndex)];
+
+    if (! currentSlot.isLoadGenerationCurrent (
+            loadGeneration))
+        return;
+
+    parameterLearnManager.cancelIfSlot (
+        currentIndex);
+
+    if (const auto& oldDescription =
+            currentSlot.getDescription();
+        oldDescription.has_value())
+        if (! oldDescription->matchesIdentifierString (
+                description.createIdentifierString()))
+            mappingEngine.clearChildParameterMappings (
+                currentIndex);
+
+    auto wrapper =
+        std::make_unique<gr::GestureBypassWrapper> (
+            std::move (instance),
+            mainInput,
+            mainOutput,
+            hostSidechain,
+            capabilities,
+            currentSlot.getBypassState());
+
+    const auto channels =
+        juce::jmin (
+            getMainBusNumInputChannels(),
+            getMainBusNumOutputChannels());
+
+    if (graphManager.installSlotProcessor (
+            currentIndex,
+            std::move (wrapper),
+            channels) == nullptr)
+    {
+        currentSlot.setLastError (
+            "GRAPH INSERT: Could not insert the hosted plug-in into the rack.");
+        return;
+    }
+
+    currentSlot.setDescription (description);
+    currentSlot.clearLastError();
+
+    ensureTrailingEmptySlot();
+    updateTotalLatency();
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::removeSlotPlugin",
+                "void GestureRackAudioProcessor::updateTotalLatency",
+r'''void GestureRackAudioProcessor::removeSlotPlugin (
+    int slotIndex)
+{
+    if (! isValidSlotIndex (slotIndex)
+        || ! slots[static_cast<size_t> (slotIndex)]
+                ->hasPlugin())
+        return;
+
+    parameterLearnManager.cancelIfSlot (
+        slotIndex);
+    mappingEngine.releaseAllActiveGestures();
+    testSignalEnabled.store (
+        false, std::memory_order_relaxed);
+
+    auto& slot =
+        *slots[static_cast<size_t> (slotIndex)];
+
+    slot.invalidatePendingLoads();
+
+    graphManager.removeSlotProcessor (
+        slotIndex,
+        juce::jmin (
+            getMainBusNumInputChannels(),
+            getMainBusNumOutputChannels()));
+
+    mappingEngine.clearChildParameterMappings (
+        slotIndex);
+
+    const auto previousSelected =
+        getSelectedSlot();
+
+    slots.erase (
+        slots.begin() + slotIndex);
+
+    reindexSlots();
+    ensureTrailingEmptySlot();
+
+    const auto loadedCount =
+        getChainSlotCount();
+
+    auto nextSelected =
+        previousSelected;
+
+    if (previousSelected == slotIndex)
+        nextSelected =
+            loadedCount > 0
+                ? juce::jmin (
+                      slotIndex,
+                      loadedCount - 1)
+                : 0;
+    else if (previousSelected > slotIndex)
+        nextSelected =
+            previousSelected - 1;
+
+    nextSelected =
+        juce::jlimit (
+            0,
+            juce::jmax (
+                0,
+                static_cast<int> (slots.size()) - 1),
+            nextSelected);
+
+    selectedSlot.store (
+        nextSelected,
+        std::memory_order_relaxed);
+
+    rightRuntime.disarmForSlotChange();
+
+    graphManager.rebuildSerialConnections (
+        juce::jmin (
+            getMainBusNumInputChannels(),
+            getMainBusNumOutputChannels()));
+
+    updateTotalLatency();
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::getStateInformation",
+                "void GestureRackAudioProcessor::clearRackForStateRestore",
+r'''void GestureRackAudioProcessor::getStateInformation (
+    juce::MemoryBlock& destData)
+{
+    juce::XmlElement root (stateTag);
+
+    root.setAttribute (
+        "version",
+        currentStateVersion);
+
+    root.setAttribute (
+        "gestureEnabled",
+        gestureEnabled.load (
+            std::memory_order_relaxed));
+
+    root.setAttribute (
+        "selectedSlot",
+        getSelectedSlot());
+
+    root.setAttribute (
+        "rightControllerArmed",
+        rightRuntime.isArmed());
+
+    root.setAttribute (
+        "rightBlockedGesture",
+        gr::controlGestureToString (
+            rightRuntime.getBlockedGesture()));
+
+    for (int slotIndex = 0;
+         slotIndex < getChainSlotCount();
+         ++slotIndex)
+    {
+        const auto& slot =
+            *slots[static_cast<size_t> (slotIndex)];
+
+        if (! slot.hasPlugin())
+            continue;
+
+        auto* slotXml =
+            root.createNewChildElement (slotTag);
+
+        slotXml->setAttribute (
+            "index",
+            slotIndex);
+
+        slotXml->setAttribute (
+            "bypassed",
+            slot.isBypassed());
+
+        if (const auto& description =
+                slot.getDescription();
+            description.has_value())
+            if (auto pluginXml =
+                    description->createXml())
+            {
+                pluginXml->setTagName (
+                    descriptionTag);
+                slotXml->addChildElement (
+                    pluginXml.release());
+            }
+
+        if (auto* child = slot.getChild())
+        {
+            juce::MemoryBlock state;
+            child->getStateInformation (state);
+
+            slotXml
+                ->createNewChildElement (
+                    pluginStateTag)
+                ->addTextElement (
+                    state.toBase64Encoding());
+        }
+
+        auto* mappingsXml =
+            slotXml->createNewChildElement (
+                mappingsTag);
+
+        for (const auto& binding :
+             slot.getMappings())
+            mappingsXml->addChildElement (
+                binding.toXml().release());
+    }
+
+    copyXmlToBinary (
+        root,
+        destData);
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::clearRackForStateRestore",
+                "void GestureRackAudioProcessor::restoreSlotFromXml",
+r'''void GestureRackAudioProcessor::clearRackForStateRestore()
+{
+    parameterLearnManager.cancel();
+
+    testSignalEnabled.store (
+        false,
+        std::memory_order_relaxed);
+
+    mappingEngine.releaseAllActiveGestures();
+    rightRuntime.reset();
+
+    lastVisionStableSlot = 0;
+    lastVisionSequence = 0;
+    lastVisionSessionId.clear();
+
+    for (auto& slot : slots)
+        if (slot != nullptr)
+            slot->invalidatePendingLoads();
+
+    graphManager.removeAllSlotProcessors (
+        juce::jmin (
+            getMainBusNumInputChannels(),
+            getMainBusNumOutputChannels()));
+
+    slots.clear();
+    appendEmptySlot();
+
+    selectedSlot.store (
+        0,
+        std::memory_order_relaxed);
+
+    updateTotalLatency();
+}''')
+
+replace_between("Source/PluginProcessor.cpp",
+                "void GestureRackAudioProcessor::restoreSlotFromXml",
+                "void GestureRackAudioProcessor::restoreLegacySingleSlotState",
+r'''void GestureRackAudioProcessor::restoreSlotFromXml (
+    const juce::XmlElement& slotXml,
+    int stateVersion,
+    int targetSlotIndex)
+{
+    if (! isValidSlotIndex (
+            targetSlotIndex))
+        return;
+
+    auto* descXml =
+        slotXml.getChildByName (
+            descriptionTag);
+
+    if (descXml == nullptr)
+        return;
+
