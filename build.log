@@ -12,7 +12,7 @@ MSBuild version 17.14.51+25f168cee for .NET Framework
   -- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
   -- Detecting CXX compile features
   -- Detecting CXX compile features - done
-  -- Configuring done (1.7s)
+  -- Configuring done (1.5s)
   -- Generating done (0.0s)
   -- Build files have been written to: D:/a/GestureRack/GestureRack/build/vst3_helpers/GestureRack
   MSBuild version 17.14.51+25f168cee for .NET Framework
@@ -62,11 +62,11 @@ D:\a\GestureRack\GestureRack\Source\GestureBypassWrapper.cpp(267,38): warning C4
   RackGraphManager.cpp
   juce_gui_basics_5.cpp
   PluginProcessor.cpp
+  juce_graphics.cpp
 D:\a\GestureRack\GestureRack\Source\PluginProcessor.cpp(631,16): warning C4458: declaration of 'blockSize' hides class member [D:\a\GestureRack\GestureRack\build\GestureRack.vcxproj]
       D:\a\GestureRack\GestureRack\JUCE\modules\juce_audio_processors_headless\processors\juce_AudioProcessor.h(1649,9):
       see declaration of 'juce::AudioProcessor::blockSize'
   
-  juce_graphics.cpp
   RackInteraction.cpp
   PluginCategory.cpp
   juce_graphics_Harfbuzz.cpp
@@ -83,8 +83,8 @@ D:\a\GestureRack\GestureRack\Source\PluginProcessor.cpp(631,16): warning C4458: 
   juce_audio_processors_headless_ara.cpp
   juce_audio_processors_headless_lv2_libs.cpp
   juce_audio_basics.cpp
-  juce_gui_basics_2.cpp
   Generating Code...
+  juce_gui_basics_2.cpp
   juce_gui_basics_3.cpp
   Generating Code...
   Compiling...
@@ -93,21 +93,21 @@ D:\a\GestureRack\GestureRack\Source\PluginProcessor.cpp(631,16): warning C4458: 
   juce_graphics.cpp
   juce_graphics_Harfbuzz.cpp
   juce_events.cpp
-  Compiling...
-  juce_audio_formats.cpp
   juce_core.cpp
-  juce_audio_devices.cpp
   juce_core_CompilationTime.cpp
   juce_data_structures.cpp
+  Compiling...
+  juce_audio_formats.cpp
   juce_audio_processors_headless.cpp
-  Generating Code...
+  juce_audio_devices.cpp
   juce_audio_processors_headless_ara.cpp
   juce_audio_processors_headless_lv2_libs.cpp
   juce_audio_basics.cpp
-  juce_graphics_Sheenbidi.c
-  GestureRackScanner.vcxproj -> D:\a\GestureRack\GestureRack\build\GestureRackScanner_artefacts\Release\GestureRackScanner.exe
+  Generating Code...
   juce_audio_utils.cpp
   juce_audio_formats.cpp
+  juce_graphics_Sheenbidi.c
+  GestureRackScanner.vcxproj -> D:\a\GestureRack\GestureRack\build\GestureRackScanner_artefacts\Release\GestureRackScanner.exe
   juce_audio_devices.cpp
   juce_dsp.cpp
   Generating Code...
