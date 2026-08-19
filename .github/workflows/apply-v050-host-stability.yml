@@ -1,0 +1,79 @@
+name: Apply v0.5.0 Host Audio Stability
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-v050-host-stability.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch processor, diagnostics and package metadata
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected exactly one match, got {count}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once('CMakeLists.txt',
+              'project(GestureRack VERSION 0.4.1 LANGUAGES C CXX)',
+              'project(GestureRack VERSION 0.5.0 LANGUAGES C CXX)')
+
+          replace_once('Source/PluginProcessor.h',
+              '    juce::String getSlotLastError (int slotIndex) const;\n    int getSlotMappingCount (int slotIndex) const;',
+              '    juce::String getSlotLastError (int slotIndex) const;\n    int getSlotMappingCount (int slotIndex) const;\n    juce::StringArray getSlotHostDiagnostics (int slotIndex) const;')
+
+          replace_once('Source/PluginProcessor.cpp',
+              '    constexpr auto controlDeltaSeconds = 1.0f / 100.0f;\n    const auto snapshot = vision.getDualHandSnapshot();',
+              '''    constexpr auto controlDeltaSeconds = 1.0f / 100.0f;\n\n    auto hostSidechainLayout = juce::AudioChannelSet::disabled();\n    if (getBusCount (true) > 1)\n        if (auto* sidechainBus = getBus (true, 1);\n            sidechainBus != nullptr && sidechainBus->isEnabled())\n            hostSidechainLayout = getChannelLayoutOfBus (true, 1);\n\n    bool graphRoutingChanged = false;\n    const auto serviceRate = getSampleRate() > 0.0 ? getSampleRate() : 44100.0;\n    const auto serviceBlockSize = getBlockSize() > 0 ? getBlockSize() : 512;\n    for (auto& slot : slots)\n        if (slot != nullptr)\n            if (auto* wrapper = slot->getWrapper())\n                graphRoutingChanged = wrapper->servicePendingReconfiguration (\n                    hostSidechainLayout, serviceRate, serviceBlockSize) || graphRoutingChanged;\n\n    if (graphRoutingChanged)\n        graphManager.rebuildSerialConnections (\n            juce::jmin (getMainBusNumInputChannels(), getMainBusNumOutputChannels()));\n\n    const auto snapshot = vision.getDualHandSnapshot();''')
+
+          replace_once('Source/PluginProcessor.cpp',
+              '''int GestureRackAudioProcessor::getSlotMappingCount (int slotIndex) const\n{\n    return isValidSlotIndex (slotIndex)\n        ? static_cast<int> (slots[static_cast<size_t> (slotIndex)]->getMappings().size()) : 0;\n}\n''',
+              '''int GestureRackAudioProcessor::getSlotMappingCount (int slotIndex) const\n{\n    return isValidSlotIndex (slotIndex)\n        ? static_cast<int> (slots[static_cast<size_t> (slotIndex)]->getMappings().size()) : 0;\n}\n\njuce::StringArray GestureRackAudioProcessor::getSlotHostDiagnostics (int slotIndex) const\n{\n    juce::StringArray lines;\n    if (! isValidSlotIndex (slotIndex)) return lines;\n    auto* wrapper = slots[static_cast<size_t> (slotIndex)]->getWrapper();\n    if (wrapper == nullptr) return lines;\n    const auto t = wrapper->getTelemetry();\n    const auto toDb = [] (float gain) { return gain > 0.0f ? juce::Decibels::gainToDecibels (gain, -120.0f) : -120.0f; };\n    lines.add ("HOST  " + juce::String (t.totalInputChannels) + " IN / " + juce::String (t.totalOutputChannels) + " OUT   |   BUSES " + juce::String (t.inputBusCount) + "/" + juce::String (t.outputBusCount));\n    lines.add ("DSP  " + juce::String (t.processMicros / 1000.0f, 2) + " ms   |   IN " + juce::String (toDb (t.inputPeak), 1) + " dB   |   OUT " + juce::String (toDb (t.outputPeak), 1) + " dB");\n    lines.add ("ROUTING  SC " + juce::String (t.sidechainActive ? "ON" : "OFF") + "   |   AUX ACTIVE " + juce::String (t.activeAuxiliaryOutputBusCount));\n    juce::String reason = "OK";\n    switch (t.lastSafetyReason)\n    {\n        case gr::HostedSafetyReason::nonFiniteOutput: reason = "NON-FINITE"; break;\n        case gr::HostedSafetyReason::runawayPeak: reason = "RUNAWAY PEAK"; break;\n        case gr::HostedSafetyReason::topologyChanged: reason = "TOPOLOGY"; break;\n        case gr::HostedSafetyReason::bridgeBusy: reason = "RECONFIG"; break;\n        case gr::HostedSafetyReason::blockTooLarge: reason = "BLOCK SIZE"; break;\n        case gr::HostedSafetyReason::none: break;\n    }\n    lines.add ("SAFETY  " + reason + "   |   TRIPS " + juce::String (t.safetyTripCount) + "   |   TOPO " + juce::String (t.topologyMismatchCount) + (t.topologyPending ? "   |   PENDING" : ""));\n    return lines;\n}\n''')
+
+          replace_once('Source/PluginProcessor.cpp',
+              '''    auto hostSidechain =\n        juce::AudioChannelSet::disabled();\n\n    if (getBusCount (true) > 1)\n        hostSidechain =\n            getChannelLayoutOfBus (true, 1);''',
+              '''    auto hostSidechain =\n        juce::AudioChannelSet::disabled();\n\n    if (getBusCount (true) > 1)\n        if (auto* sidechainBus = getBus (true, 1);\n            sidechainBus != nullptr && sidechainBus->isEnabled())\n            hostSidechain = getChannelLayoutOfBus (true, 1);''')
+
+          replace_once('Source/PluginProcessor.cpp',
+              '''            mainOutput,\n            hostSidechain,\n            capabilities,\n            currentSlot.getBypassState());''',
+              '''            mainOutput,\n            hostSidechain,\n            description.isInstrument,\n            capabilities,\n            currentSlot.getBypassState());''')
+
+          replace_once('Source/PluginEditor.cpp',
+              '''    menu.addItem (106, "AUDIO  " + (sr > 0.0 ? juce::String (sr / 1000.0, 1) + " kHz" : juce::String ("--"))\n                        + " / " + (bs > 0 ? juce::String (bs) : juce::String ("--")), false);''',
+              '''    menu.addItem (106, "AUDIO  " + (sr > 0.0 ? juce::String (sr / 1000.0, 1) + " kHz" : juce::String ("--"))\n                        + " / " + (bs > 0 ? juce::String (bs) : juce::String ("--")), false);\n    const auto hostDiagnostics = processor.getSlotHostDiagnostics (processor.getSelectedSlot());\n    for (int i = 0; i < hostDiagnostics.size(); ++i)\n        menu.addItem (200 + i, hostDiagnostics[i], false);''')
+
+          replace_once('Source/PluginEditor.cpp',
+              '"Gesture Rack\\nGesture-controlled VST3 effect rack."',
+              '"Gesture Rack\\nGesture-controlled VST3 plug-in and instrument rack."')
+
+          replace_once('.github/workflows/windows-vst3-fast-package.yml',
+              '"Version: 0.4.1",', '"Version: 0.5.0",')
+          replace_once('.github/workflows/windows-vst3-fast-package.yml',
+              '"Audio bridge: direct in-place path for ordinary effects plus safe dry fallback",',
+              '"Audio bridge: isolated child buffers with topology-safe reconfiguration",\n            "DSP safety: NaN/Inf and runaway peak rejection per hosted slot",\n            "DSP telemetry: per-slot peak, process time, topology and safety counters",')
+
+      - name: Commit v0.5.0 to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt Source/PluginProcessor.h Source/PluginProcessor.cpp Source/PluginEditor.cpp .github/workflows/windows-vst3-fast-package.yml
+          git commit -m "Complete v0.5.0 hosted audio stability refactor"
+          git push origin HEAD:main
