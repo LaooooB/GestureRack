@@ -2,29 +2,24 @@
 
 namespace
 {
-// JUCE 8 keeps AudioProcessor::BusesProperties protected. Expose the type through
-// an abstract derived helper so the bridge factory can stay outside the processor
-// class without weakening JUCE headers or duplicating the constructor logic.
 struct AudioProcessorBusAccess : juce::AudioProcessor
 {
     using BusesProperties = juce::AudioProcessor::BusesProperties;
 };
 
-AudioProcessorBusAccess::BusesProperties makeBridgeBuses (const juce::AudioChannelSet& inputSet,
-                                                           const juce::AudioChannelSet& outputSet,
-                                                           const juce::AudioChannelSet& sidechainSet,
-                                                           const gr::HostedPluginCapabilities& capabilities)
+AudioProcessorBusAccess::BusesProperties makeBridgeBuses (
+    const juce::AudioChannelSet& inputSet,
+    const juce::AudioChannelSet& outputSet,
+    const juce::AudioChannelSet& sidechainSet,
+    const gr::HostedPluginCapabilities& capabilities)
 {
     if (capabilities.sidechainInputBus >= 1)
     {
         const auto bridgeSidechain = sidechainSet.isDisabled()
             ? juce::AudioChannelSet::stereo() : sidechainSet;
+
         return AudioProcessorBusAccess::BusesProperties()
             .withInput ("Input", inputSet, true)
-            // Keep the bridge-side sidechain alive even when the outer DAW bus is
-            // currently disabled. It simply receives silence until RackGraphManager
-            // gets real sidechain channels, so enabling a DAW route later does not
-            // require reloading the hosted plug-in.
             .withInput ("Sidechain", bridgeSidechain, true)
             .withOutput ("Output", outputSet, true);
     }
@@ -36,7 +31,8 @@ AudioProcessorBusAccess::BusesProperties makeBridgeBuses (const juce::AudioChann
 
 bool isRackMainLayout (const juce::AudioChannelSet& set)
 {
-    return set == juce::AudioChannelSet::mono() || set == juce::AudioChannelSet::stereo();
+    return set == juce::AudioChannelSet::mono()
+        || set == juce::AudioChannelSet::stereo();
 }
 
 bool configureMainBus (juce::AudioPluginInstance& child,
@@ -50,14 +46,16 @@ bool configureMainBus (juce::AudioPluginInstance& child,
     if (! requested.isDisabled() && current == requested)
         return true;
 
-    if (! requested.isDisabled() && child.setChannelLayoutOfBus (isInput, 0, requested))
+    if (! requested.isDisabled()
+        && child.setChannelLayoutOfBus (isInput, 0, requested))
         return true;
 
     current = child.getChannelLayoutOfBus (isInput, 0);
     if (isRackMainLayout (current))
         return true;
 
-    for (const auto fallback : { juce::AudioChannelSet::stereo(), juce::AudioChannelSet::mono() })
+    for (const auto fallback : { juce::AudioChannelSet::stereo(),
+                                 juce::AudioChannelSet::mono() })
         if (child.setChannelLayoutOfBus (isInput, 0, fallback))
             return true;
 
@@ -70,6 +68,7 @@ void copyAdapted (const juce::AudioBuffer<float>& source,
 {
     const auto sourceChannels = source.getNumChannels();
     const auto destinationChannels = destination.getNumChannels();
+
     if (destinationChannels <= 0 || samples <= 0)
         return;
 
@@ -99,7 +98,9 @@ void copyAdapted (const juce::AudioBuffer<float>& source,
         return;
     }
 
-    const auto commonChannels = juce::jmin (sourceChannels, destinationChannels);
+    const auto commonChannels =
+        juce::jmin (sourceChannels, destinationChannels);
+
     for (int channel = 0; channel < commonChannels; ++channel)
         destination.copyFrom (channel, 0, source, channel, 0, samples);
 
@@ -110,12 +111,14 @@ void copyAdapted (const juce::AudioBuffer<float>& source,
 
 namespace gr
 {
-bool GestureBypassWrapper::configureChildForHosting (juce::AudioPluginInstance& child,
-                                                       const juce::AudioChannelSet& requestedMainInput,
-                                                       const juce::AudioChannelSet& requestedMainOutput,
-                                                       const juce::AudioChannelSet& hostSidechainLayout,
-                                                       HostedPluginCapabilities& capabilities,
-                                                       juce::String& error)
+bool GestureBypassWrapper::configureChildForHosting (
+    juce::AudioPluginInstance& child,
+    const juce::AudioChannelSet& requestedMainInput,
+    const juce::AudioChannelSet& requestedMainOutput,
+    const juce::AudioChannelSet& hostSidechainLayout,
+    bool allowZeroMainInput,
+    HostedPluginCapabilities& capabilities,
+    juce::String& error)
 {
     capabilities = {};
     error.clear();
@@ -126,82 +129,113 @@ bool GestureBypassWrapper::configureChildForHosting (juce::AudioPluginInstance& 
     capabilities.producesMidi = child.producesMidi();
     capabilities.hasNativeEditor = child.hasEditor();
 
-    if (capabilities.inputBusCount <= 0 || capabilities.outputBusCount <= 0)
+    if (capabilities.outputBusCount <= 0)
     {
-        error = "The hosted plug-in has no routable main audio input/output bus.";
+        error = "The hosted plug-in has no routable main audio output bus.";
         return false;
     }
 
-    // A meta/rack effect may expose sidechains and many auxiliary outputs. Those buses
-    // must not make the main stereo path fail. Disable them first, then selectively
-    // re-enable one usable secondary input. If the outer DAW sidechain is currently
-    // disabled we pre-negotiate stereo so a later DAW sidechain route can become live
-    // without recreating the hosted instance.
     capabilities.nonMainBusesDisabled = child.disableNonMainBuses();
 
-    if (! configureMainBus (child, true, requestedMainInput)
-        || ! configureMainBus (child, false, requestedMainOutput))
+    bool mainInputConfigured = false;
+    if (capabilities.inputBusCount > 0)
+        mainInputConfigured =
+            configureMainBus (child, true, requestedMainInput);
+
+    if (! mainInputConfigured && ! allowZeroMainInput)
     {
-        error = "The hosted plug-in cannot provide a mono/stereo main audio path.";
+        error = "The hosted effect cannot provide a mono/stereo main audio input.";
         return false;
     }
 
-    capabilities.mainInputChannels = child.getMainBusNumInputChannels();
+    if (! configureMainBus (child, false, requestedMainOutput))
+    {
+        error = "The hosted plug-in cannot provide a mono/stereo main audio output.";
+        return false;
+    }
+
+    capabilities.mainInputChannels =
+        mainInputConfigured ? child.getMainBusNumInputChannels() : 0;
     capabilities.mainOutputChannels = child.getMainBusNumOutputChannels();
-    if (capabilities.mainInputChannels <= 0 || capabilities.mainOutputChannels <= 0
-        || capabilities.mainInputChannels > 2 || capabilities.mainOutputChannels > 2)
+    capabilities.zeroInputInstrument =
+        allowZeroMainInput && capabilities.mainInputChannels <= 0;
+
+    if (capabilities.mainInputChannels < 0
+        || capabilities.mainInputChannels > 2
+        || capabilities.mainOutputChannels <= 0
+        || capabilities.mainOutputChannels > 2)
     {
         error = "The hosted plug-in main bus is not compatible with the rack mono/stereo bridge.";
         return false;
     }
 
-    const auto preferredSidechain = hostSidechainLayout.isDisabled()
-        ? juce::AudioChannelSet::stereo() : hostSidechainLayout;
-    for (int busIndex = 1; busIndex < child.getBusCount (true); ++busIndex)
+    if (mainInputConfigured)
     {
-        auto* bus = child.getBus (true, busIndex);
-        if (bus == nullptr || ! bus->enable (true))
-            continue;
+        const auto preferredSidechain = hostSidechainLayout.isDisabled()
+            ? juce::AudioChannelSet::stereo()
+            : hostSidechainLayout;
 
-        auto configured = child.setChannelLayoutOfBus (true, busIndex, preferredSidechain);
-        if (! configured)
+        for (int busIndex = 1; busIndex < child.getBusCount (true); ++busIndex)
         {
-            auto current = child.getChannelLayoutOfBus (true, busIndex);
-            configured = isRackMainLayout (current);
+            auto* bus = child.getBus (true, busIndex);
+            if (bus == nullptr || ! bus->enable (true))
+                continue;
+
+            auto configured =
+                child.setChannelLayoutOfBus (true, busIndex, preferredSidechain);
+
             if (! configured)
-                for (const auto fallback : { juce::AudioChannelSet::stereo(), juce::AudioChannelSet::mono() })
-                    if (child.setChannelLayoutOfBus (true, busIndex, fallback))
-                    {
-                        configured = true;
-                        break;
-                    }
-        }
+            {
+                auto current = child.getChannelLayoutOfBus (true, busIndex);
+                configured = isRackMainLayout (current);
 
-        if (configured)
-        {
-            capabilities.sidechainInputBus = busIndex;
-            capabilities.sidechainInputChannels = child.getChannelCountOfBus (true, busIndex);
-            break;
-        }
+                if (! configured)
+                    for (const auto fallback : {
+                             juce::AudioChannelSet::stereo(),
+                             juce::AudioChannelSet::mono() })
+                        if (child.setChannelLayoutOfBus (
+                                true, busIndex, fallback))
+                        {
+                            configured = true;
+                            break;
+                        }
+            }
 
-        bus->enable (false);
+            if (configured)
+            {
+                capabilities.sidechainInputBus = busIndex;
+                capabilities.sidechainInputChannels =
+                    child.getChannelCountOfBus (true, busIndex);
+                break;
+            }
+
+            bus->enable (false);
+        }
     }
 
-    capabilities.auxiliaryOutputBusCount = juce::jmax (0, child.getBusCount (false) - 1);
-    for (int busIndex = 1; busIndex < child.getBusCount (false); ++busIndex)
-        if (auto* bus = child.getBus (false, busIndex); bus != nullptr && bus->isEnabled())
+    capabilities.auxiliaryOutputBusCount =
+        juce::jmax (0, child.getBusCount (false) - 1);
+
+    for (int busIndex = 1;
+         busIndex < child.getBusCount (false); ++busIndex)
+        if (auto* bus = child.getBus (false, busIndex);
+            bus != nullptr && bus->isEnabled())
             ++capabilities.activeAuxiliaryOutputBusCount;
 
     return true;
 }
 
-GestureBypassWrapper::GestureBypassWrapper (std::unique_ptr<juce::AudioPluginInstance> childToOwn,
-                                            const juce::AudioChannelSet& inputSet,
-                                            const juce::AudioChannelSet& outputSet,
-                                            const juce::AudioChannelSet& hostSidechainSet,
-                                            HostedPluginCapabilities capabilitiesToUse,
-                                            std::atomic<bool>& requestedBypassState)
-    : juce::AudioProcessor (makeBridgeBuses (inputSet, outputSet, hostSidechainSet, capabilitiesToUse)),
+GestureBypassWrapper::GestureBypassWrapper (
+    std::unique_ptr<juce::AudioPluginInstance> childToOwn,
+    const juce::AudioChannelSet& inputSet,
+    const juce::AudioChannelSet& outputSet,
+    const juce::AudioChannelSet& hostSidechainSet,
+    HostedPluginCapabilities capabilitiesToUse,
+    std::atomic<bool>& requestedBypassState)
+    : juce::AudioProcessor (
+          makeBridgeBuses (
+              inputSet, outputSet, hostSidechainSet,
+              capabilitiesToUse)),
       child (std::move (childToOwn)),
       capabilities (std::move (capabilitiesToUse)),
       requestedBypass (requestedBypassState)
@@ -220,23 +254,30 @@ int GestureBypassWrapper::getChildLatencySamples() const noexcept
     return child != nullptr ? child->getLatencySamples() : 0;
 }
 
-juce::AudioProcessorEditor* GestureBypassWrapper::getOrCreateEmbeddedEditor()
+juce::AudioProcessorEditor*
+GestureBypassWrapper::getOrCreateEmbeddedEditor()
 {
-    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    jassert (
+        juce::MessageManager::getInstance()->isThisTheMessageThread());
+
     if (child == nullptr || ! child->hasEditor())
         return nullptr;
+
     if (embeddedEditor == nullptr)
         embeddedEditor.reset (child->createEditorIfNeeded());
+
     return embeddedEditor.get();
 }
 
 void GestureBypassWrapper::releaseEmbeddedEditor()
 {
-    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    jassert (
+        juce::MessageManager::getInstance()->isThisTheMessageThread());
     embeddedEditor.reset();
 }
 
-void GestureBypassWrapper::prepareToPlay (double sampleRate, int samplesPerBlock)
+void GestureBypassWrapper::prepareToPlay (
+    double sampleRate, int samplesPerBlock)
 {
     if (childPrepared && child != nullptr)
     {
@@ -244,30 +285,53 @@ void GestureBypassWrapper::prepareToPlay (double sampleRate, int samplesPerBlock
         childPrepared = false;
     }
 
-    const auto mainOutputChannels = juce::jmax (1, getMainBusNumOutputChannels());
-    juce::dsp::ProcessSpec spec { sampleRate,
-                                 static_cast<juce::uint32> (juce::jmax (1, samplesPerBlock)),
-                                 static_cast<juce::uint32> (mainOutputChannels) };
+    const auto mainOutputChannels =
+        juce::jmax (1, getMainBusNumOutputChannels());
+
+    juce::dsp::ProcessSpec spec {
+        sampleRate,
+        static_cast<juce::uint32> (
+            juce::jmax (1, samplesPerBlock)),
+        static_cast<juce::uint32> (mainOutputChannels)
+    };
+
     dryDelay.prepare (spec);
     dryDelay.reset();
 
-    scratchCapacitySamples = juce::jmax (minimumRealtimeScratchSamples, samplesPerBlock);
-    dryBuffer.setSize (mainOutputChannels, scratchCapacitySamples, false, false, true);
+    scratchCapacitySamples =
+        juce::jmax (minimumRealtimeScratchSamples, samplesPerBlock);
+
+    dryBuffer.setSize (
+        mainOutputChannels, scratchCapacitySamples,
+        false, false, true);
 
     childBufferChannels = child != nullptr
-        ? juce::jmax (1, juce::jmax (child->getTotalNumInputChannels(), child->getTotalNumOutputChannels()))
+        ? juce::jmax (
+              1,
+              juce::jmax (
+                  child->getTotalNumInputChannels(),
+                  child->getTotalNumOutputChannels()))
         : 1;
-    childBuffer.setSize (childBufferChannels, scratchCapacitySamples, false, false, true);
+
+    childBuffer.setSize (
+        childBufferChannels, scratchCapacitySamples,
+        false, false, true);
 
     wetMix.reset (sampleRate, 0.015);
-    wetMix.setCurrentAndTargetValue (requestedBypass.load (std::memory_order_relaxed) ? 0.0f : 1.0f);
-    lastRequestedBypass = requestedBypass.load (std::memory_order_relaxed);
+    wetMix.setCurrentAndTargetValue (
+        requestedBypass.load (std::memory_order_relaxed)
+            ? 0.0f : 1.0f);
+
+    lastRequestedBypass =
+        requestedBypass.load (std::memory_order_relaxed);
 
     if (child != nullptr)
     {
         child->setPlayHead (getPlayHead());
-        child->setRateAndBufferSizeDetails (sampleRate, samplesPerBlock);
-        child->prepareToPlay (sampleRate, samplesPerBlock);
+        child->setRateAndBufferSizeDetails (
+            sampleRate, samplesPerBlock);
+        child->prepareToPlay (
+            sampleRate, samplesPerBlock);
         childPrepared = true;
     }
 }
@@ -279,109 +343,219 @@ void GestureBypassWrapper::releaseResources()
         child->releaseResources();
         childPrepared = false;
     }
+
     dryDelay.reset();
 }
 
-bool GestureBypassWrapper::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool GestureBypassWrapper::isBusesLayoutSupported (
+    const BusesLayout& layouts) const
 {
     const auto in = layouts.getMainInputChannelSet();
     const auto out = layouts.getMainOutputChannelSet();
+
     if (in != out || ! isRackMainLayout (in))
         return false;
 
     if (getBusCount (true) > 1)
     {
-        const auto sidechain = layouts.getChannelSet (true, 1);
-        if (! sidechain.isDisabled() && ! isRackMainLayout (sidechain))
+        const auto sidechain =
+            layouts.getChannelSet (true, 1);
+
+        if (! sidechain.isDisabled()
+            && ! isRackMainLayout (sidechain))
             return false;
     }
 
     return true;
 }
 
-void GestureBypassWrapper::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void GestureBypassWrapper::processBlock (
+    juce::AudioBuffer<float>& buffer,
+    juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
+
     if (child == nullptr)
         return;
 
     child->setPlayHead (getPlayHead());
-    const auto shouldBypass = requestedBypass.load (std::memory_order_relaxed);
+
+    const auto shouldBypass =
+        requestedBypass.load (std::memory_order_relaxed);
+
     if (shouldBypass != lastRequestedBypass)
     {
         lastRequestedBypass = shouldBypass;
-        wetMix.setTargetValue (shouldBypass ? 0.0f : 1.0f);
+        wetMix.setTargetValue (
+            shouldBypass ? 0.0f : 1.0f);
     }
 
     const auto samples = buffer.getNumSamples();
-    auto hostMainInput = getBusBuffer (buffer, true, 0);
-    auto hostMainOutput = getBusBuffer (buffer, false, 0);
+    auto hostMainInput =
+        getBusBuffer (buffer, true, 0);
+    auto hostMainOutput =
+        getBusBuffer (buffer, false, 0);
 
-    // Never allocate or touch a too-small scratch buffer on the audio thread. An
-    // unexpectedly large host block is passed through dry; the normal preallocated
-    // bridge resumes on the next block.
+    copyAdapted (
+        hostMainInput, hostMainOutput, samples);
+
     if (samples > scratchCapacitySamples)
         return;
 
-    copyAdapted (hostMainInput, dryBuffer, samples);
+    copyAdapted (
+        hostMainInput, dryBuffer, samples);
 
-    const auto dryChannels = dryBuffer.getNumChannels();
-    const auto latency = juce::jlimit (0, maxCompensatedLatencySamples - 1, child->getLatencySamples());
-    dryDelay.setDelay (static_cast<float> (latency));
+    const auto dryChannels =
+        dryBuffer.getNumChannels();
+    const auto latency =
+        juce::jlimit (
+            0,
+            maxCompensatedLatencySamples - 1,
+            child->getLatencySamples());
+
+    dryDelay.setDelay (
+        static_cast<float> (latency));
+
     for (int sample = 0; sample < samples; ++sample)
-        for (int channel = 0; channel < dryChannels; ++channel)
+        for (int channel = 0;
+             channel < dryChannels; ++channel)
         {
-            dryDelay.pushSample (channel, dryBuffer.getSample (channel, sample));
-            dryBuffer.setSample (channel, sample, dryDelay.popSample (channel));
+            dryDelay.pushSample (
+                channel,
+                dryBuffer.getSample (
+                    channel, sample));
+
+            dryBuffer.setSample (
+                channel, sample,
+                dryDelay.popSample (channel));
         }
 
-    const auto requiredChildChannels = juce::jmax (1, juce::jmax (child->getTotalNumInputChannels(),
-                                                                   child->getTotalNumOutputChannels()));
-    if (requiredChildChannels != childBufferChannels)
+    bool processed = false;
+
+    const auto canProcessDirect =
+        capabilities.mainInputChannels
+            == hostMainInput.getNumChannels()
+        && capabilities.mainOutputChannels
+            == hostMainOutput.getNumChannels()
+        && capabilities.sidechainInputBus < 0
+        && child->getTotalNumInputChannels()
+            == capabilities.mainInputChannels
+        && child->getTotalNumOutputChannels()
+            == capabilities.mainOutputChannels;
+
+    if (canProcessDirect)
     {
-        copyAdapted (dryBuffer, hostMainOutput, samples);
+        child->processBlock (
+            hostMainOutput, midi);
+        processed = true;
+    }
+    else
+    {
+        const auto requiredChildChannels =
+            juce::jmax (
+                1,
+                juce::jmax (
+                    child->getTotalNumInputChannels(),
+                    child->getTotalNumOutputChannels()));
+
+        if (requiredChildChannels
+            == childBufferChannels)
+        {
+            childBuffer.clear (0, samples);
+
+            if (capabilities.mainInputChannels > 0
+                && child->getBusCount (true) > 0)
+            {
+                auto childMainInput =
+                    child->getBusBuffer (
+                        childBuffer, true, 0);
+
+                copyAdapted (
+                    hostMainInput,
+                    childMainInput,
+                    samples);
+            }
+
+            if (capabilities.sidechainInputBus >= 1
+                && getBusCount (true) > 1)
+            {
+                auto hostSidechain =
+                    getBusBuffer (buffer, true, 1);
+
+                auto childSidechain =
+                    child->getBusBuffer (
+                        childBuffer,
+                        true,
+                        capabilities.sidechainInputBus);
+
+                copyAdapted (
+                    hostSidechain,
+                    childSidechain,
+                    samples);
+            }
+
+            child->processBlock (
+                childBuffer, midi);
+
+            auto childMainOutput =
+                child->getBusBuffer (
+                    childBuffer, false, 0);
+
+            copyAdapted (
+                childMainOutput,
+                hostMainOutput,
+                samples);
+
+            processed = true;
+        }
+    }
+
+    if (! processed)
         return;
-    }
 
-    childBuffer.clear (0, samples);
-    auto childMainInput = child->getBusBuffer (childBuffer, true, 0);
-    copyAdapted (hostMainInput, childMainInput, samples);
-
-    if (capabilities.sidechainInputBus >= 1 && getBusCount (true) > 1)
+    for (int sample = 0;
+         sample < samples; ++sample)
     {
-        auto hostSidechain = getBusBuffer (buffer, true, 1);
-        auto childSidechain = child->getBusBuffer (childBuffer, true, capabilities.sidechainInputBus);
-        copyAdapted (hostSidechain, childSidechain, samples);
-    }
+        const auto wet =
+            wetMix.getNextValue();
+        const auto dry =
+            1.0f - wet;
 
-    child->processBlock (childBuffer, midi);
+        for (int channel = 0;
+             channel < hostMainOutput.getNumChannels();
+             ++channel)
+        {
+            const auto dryChannel =
+                juce::jmin (
+                    channel,
+                    dryChannels - 1);
 
-    auto childMainOutput = child->getBusBuffer (childBuffer, false, 0);
-    copyAdapted (childMainOutput, hostMainOutput, samples);
-
-    for (int sample = 0; sample < samples; ++sample)
-    {
-        const auto wet = wetMix.getNextValue();
-        const auto dry = 1.0f - wet;
-        for (int channel = 0; channel < hostMainOutput.getNumChannels(); ++channel)
-            hostMainOutput.setSample (channel, sample,
-                                      hostMainOutput.getSample (channel, sample) * wet
-                                      + dryBuffer.getSample (juce::jmin (channel, dryChannels - 1), sample) * dry);
+            hostMainOutput.setSample (
+                channel, sample,
+                hostMainOutput.getSample (
+                    channel, sample) * wet
+                + dryBuffer.getSample (
+                    dryChannel, sample) * dry);
+        }
     }
 }
 
 double GestureBypassWrapper::getTailLengthSeconds() const
 {
-    return child != nullptr ? child->getTailLengthSeconds() : 0.0;
+    return child != nullptr
+        ? child->getTailLengthSeconds()
+        : 0.0;
 }
 
 bool GestureBypassWrapper::acceptsMidi() const
 {
-    return child != nullptr && child->acceptsMidi();
+    return child != nullptr
+        && child->acceptsMidi();
 }
 
 bool GestureBypassWrapper::producesMidi() const
 {
-    return child != nullptr && child->producesMidi();
+    return child != nullptr
+        && child->producesMidi();
 }
 }

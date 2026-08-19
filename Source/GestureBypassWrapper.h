@@ -18,6 +18,7 @@ struct HostedPluginCapabilities
     bool producesMidi = false;
     bool hasNativeEditor = false;
     bool nonMainBusesDisabled = false;
+    bool zeroInputInstrument = false;
 };
 
 class GestureBypassWrapper final : public juce::AudioProcessor
@@ -30,6 +31,7 @@ public:
                                           const juce::AudioChannelSet& requestedMainInput,
                                           const juce::AudioChannelSet& requestedMainOutput,
                                           const juce::AudioChannelSet& hostSidechainLayout,
+                                          bool allowZeroMainInput,
                                           HostedPluginCapabilities& capabilities,
                                           juce::String& error);
 

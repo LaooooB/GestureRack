@@ -18,7 +18,7 @@ class GestureRackAudioProcessor final : public juce::AudioProcessor,
                                         private juce::Timer
 {
 public:
-    static constexpr int slotCount = gr::RackGraphManager::slotCount;
+    static constexpr int gestureControllableSlotCount = 10;
 
     GestureRackAudioProcessor();
     ~GestureRackAudioProcessor() override;
@@ -67,6 +67,22 @@ public:
 
     int getSelectedSlot() const noexcept { return selectedSlot.load (std::memory_order_relaxed); }
     void setSelectedSlot (int slotIndex) noexcept;
+
+    int getChainSlotCount() const noexcept
+    {
+        return juce::jmax (0, static_cast<int> (slots.size()) - 1);
+    }
+    int getAddSlotIndex() const noexcept
+    {
+        return slots.empty() ? 0 : static_cast<int> (slots.size()) - 1;
+    }
+    bool isGestureControllableSlot (int slotIndex) const noexcept
+    {
+        return slotIndex >= 0
+            && slotIndex < gestureControllableSlotCount
+            && slotIndex < getChainSlotCount()
+            && isSlotLoaded (slotIndex);
+    }
 
     bool isSlotLoaded (int slotIndex) const noexcept;
     bool isSlotBypassed (int slotIndex) const noexcept;
@@ -166,10 +182,17 @@ public:
     juce::String getMappingStatus() const { return mappingStatus; }
 
 private:
-    static bool isValidSlotIndex (int slotIndex) noexcept
+    bool isValidSlotIndex (int slotIndex) const noexcept
     {
-        return slotIndex >= 0 && slotIndex < slotCount;
+        return slotIndex >= 0
+            && slotIndex < static_cast<int> (slots.size())
+            && slots[static_cast<size_t> (slotIndex)] != nullptr;
     }
+
+    void appendEmptySlot();
+    void ensureTrailingEmptySlot();
+    void reindexSlots();
+    int findSlotIndexByStableId (uint64_t stableId) const noexcept;
 
     void timerCallback() override;
 
@@ -183,7 +206,7 @@ private:
                        const juce::MemoryBlock* restoredState);
 
     void clearRackForStateRestore();
-    void restoreSlotFromXml (const juce::XmlElement& slotXml, int stateVersion);
+    void restoreSlotFromXml (const juce::XmlElement& slotXml, int stateVersion, int targetSlotIndex);
     void restoreLegacySingleSlotState (const juce::XmlElement& root);
     void installDefaultMappingsForSlot (int slotIndex);
     void installDefaultMappingsForAllSlots();
@@ -201,13 +224,12 @@ private:
     juce::String lastVisionSessionId;
 
     juce::AudioProcessorGraph graph;
-    gr::RackGraphManager::SlotArray slots;
+    gr::RackGraphManager::SlotList slots;
     gr::RackGraphManager graphManager;
     gr::GestureMappingEngine mappingEngine;
     gr::ParameterLearnManager parameterLearnManager;
 
     juce::AudioPluginFormatManager formatManager;
-    std::array<std::atomic<uint64_t>, slotCount> slotLoadGenerations {};
     std::atomic<uint64_t> stateRestoreGeneration { 0 };
     std::shared_ptr<std::atomic<bool>> aliveFlag { std::make_shared<std::atomic<bool>> (true) };
 

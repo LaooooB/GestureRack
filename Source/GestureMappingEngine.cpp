@@ -18,14 +18,15 @@ private:
 };
 }
 
-GestureMappingEngine::GestureMappingEngine (RackGraphManager::SlotArray& slotsToUse) noexcept
+GestureMappingEngine::GestureMappingEngine (RackGraphManager::SlotList& slotsToUse) noexcept
     : slots (slotsToUse)
 {
 }
 
 bool GestureMappingEngine::isValidSlotIndex (int slotIndex) const noexcept
 {
-    return slotIndex >= 0 && slotIndex < RackGraphManager::slotCount
+    return slotIndex >= 0
+        && slotIndex < static_cast<int> (slots.size())
         && slots[static_cast<size_t> (slotIndex)] != nullptr;
 }
 
@@ -489,7 +490,7 @@ void GestureMappingEngine::triggerGestureExited (int slotIndex, ControlGesture g
 
 void GestureMappingEngine::releaseAllActiveGestures()
 {
-    for (int slotIndex = 0; slotIndex < RackGraphManager::slotCount; ++slotIndex)
+    for (int slotIndex = 0; slotIndex < static_cast<int> (slots.size()); ++slotIndex)
         if (isValidSlotIndex (slotIndex))
             for (const auto& binding : getMappings (slotIndex))
                 endHostGesture (slotIndex, binding);

@@ -504,37 +504,37 @@ void GestureRackAudioProcessorEditor::RackSlotButton::mouseUp (const juce::Mouse
     juce::Button::mouseUp (e);
 }
 
-GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAudioProcessor& p)
-    : juce::AudioProcessorEditor (&p), processor (p), parameterInspector (p)
+GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (
+    GestureRackAudioProcessor& p)
+    : juce::AudioProcessorEditor (&p),
+      processor (p),
+      parameterInspector (p)
 {
     setWantsKeyboardFocus (true);
-    setSize (metrics::defaultEditorWidth, metrics::defaultEditorHeight);
-    setResizable (true, true);
-    setResizeLimits (metrics::minimumEditorWidth, metrics::minimumEditorHeight, 3200, 2100);
+    setSize (
+        metrics::defaultEditorWidth,
+        metrics::defaultEditorHeight);
 
-    for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
-    {
-        auto& button = slotButtons[static_cast<size_t> (i)];
-        addAndMakeVisible (button);
-        button.bodyClick = [this, i]
+    setResizable (true, true);
+
+    setResizeLimits (
+        metrics::minimumEditorWidth,
+        metrics::minimumEditorHeight,
+        3200,
+        2100);
+
+    addAndMakeVisible (
+        addSlotButton);
+
+    addSlotButton.bodyClick =
+        [this]
         {
-            processor.setSelectedSlot (i);
-            updateSlotButtons();
-            updateEmbeddedEditor();
-            if (! processor.isSlotLoaded (i)) showPluginBrowserForSlot (i);
-            repaint();
+            showPluginBrowserForSlot (
+                processor.getAddSlotIndex());
         };
-        button.powerClick = [this, i]
-        {
-            if (! processor.isSlotLoaded (i)) return;
-            processor.setSlotBypassed (i, ! processor.isSlotBypassed (i));
-            updateSlotButtons();
-            repaint();
-        };
-        button.dragDown = [this, i] (const juce::MouseEvent& e) { handleSlotMouseDown (i, e); };
-        button.dragMove = [this] (const juce::MouseEvent& e) { handleSlotMouseDrag (e); };
-        button.dragUp = [this] (const juce::MouseEvent& e) { handleSlotMouseUp (e); };
-    }
+
+    addSlotButton.setTooltip (
+        "Add plugin");
 
     addAndMakeVisible (railSearchButton);
     addAndMakeVisible (removeButton);
@@ -543,20 +543,60 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     addAndMakeVisible (settingsButton);
     addAndMakeVisible (menuButton);
 
-    railSearchButton.onClick = [this] { showPluginBrowser(); };
-    removeButton.onClick = [this] { removeSelectedPlugin(); };
-    bypassButton.onClick = [this]
-    {
-        const auto slot = processor.getSelectedSlot();
-        if (! processor.isSlotLoaded (slot)) return;
-        processor.setSlotBypassed (slot, ! processor.isSlotBypassed (slot));
-        updateSlotButtons();
-        repaint();
-    };
-    pluginMoreButton.onClick = [this] { showPluginMoreMenu(); };
-    swapHandsButton.onClick = [this] { processor.toggleSwapHandedness(); };
-    settingsButton.onClick = [this] { showSettingsMenu(); };
-    menuButton.onClick = [this] { showMainMenu(); };
+    railSearchButton.onClick =
+        [this]
+        {
+            showPluginBrowser();
+        };
+
+    removeButton.onClick =
+        [this]
+        {
+            removeSelectedPlugin();
+        };
+
+    bypassButton.onClick =
+        [this]
+        {
+            const auto slot =
+                processor.getSelectedSlot();
+
+            if (! processor.isSlotLoaded (
+                    slot))
+                return;
+
+            processor.setSlotBypassed (
+                slot,
+                ! processor.isSlotBypassed (
+                    slot));
+
+            updateSlotButtons();
+            repaint();
+        };
+
+    pluginMoreButton.onClick =
+        [this]
+        {
+            showPluginMoreMenu();
+        };
+
+    swapHandsButton.onClick =
+        [this]
+        {
+            processor.toggleSwapHandedness();
+        };
+
+    settingsButton.onClick =
+        [this]
+        {
+            showSettingsMenu();
+        };
+
+    menuButton.onClick =
+        [this]
+        {
+            showMainMenu();
+        };
 
     settingsButton.setAccentWhenOn (false);
     menuButton.setAccentWhenOn (false);
@@ -564,38 +604,83 @@ GestureRackAudioProcessorEditor::GestureRackAudioProcessorEditor (GestureRackAud
     removeButton.setAccentWhenOn (false);
     pluginMoreButton.setAccentWhenOn (false);
 
-    addAndMakeVisible (parameterInspector);
+    addAndMakeVisible (
+        parameterInspector);
 
-    embeddedCanvas = std::make_unique<EmbeddedEditorCanvas>();
-    addAndMakeVisible (pluginViewport);
-    pluginViewport.setViewedComponent (embeddedCanvas.get(), false);
-    pluginViewport.setScrollBarsShown (false, false);
-    pluginViewport.setScrollBarThickness (8);
-    pluginViewport.setColour (juce::ScrollBar::thumbColourId, ui::gray.withAlpha (0.34f));
-    pluginViewport.setColour (juce::ScrollBar::backgroundColourId, ui::viewport);
+    embeddedCanvas =
+        std::make_unique<
+            EmbeddedEditorCanvas>();
 
-    gesturePanel = std::make_unique<GesturePanel> (*this);
-    addAndMakeVisible (*gesturePanel);
+    addAndMakeVisible (
+        pluginViewport);
 
-    pluginBrowser = std::make_unique<PluginBrowserComponent> (
-        [this] (int slotIndex, const juce::PluginDescription& description)
-        {
-            if (embeddedCanvas != nullptr) embeddedCanvas->detach();
-            displayedChildIdentity = 0;
-            displayedSlot = -1;
-            lastNativeEditorSize = {};
-            processor.setSelectedSlot (slotIndex);
-            processor.loadPluginDescription (slotIndex, description);
-            updateSlotButtons();
-            updateEmbeddedEditor();
-            repaint();
-        },
-        [this] { hidePluginBrowser(); });
-    addAndMakeVisible (*pluginBrowser);
-    pluginBrowser->setVisible (false);
+    pluginViewport.setViewedComponent (
+        embeddedCanvas.get(),
+        false);
 
+    pluginViewport.setScrollBarsShown (
+        false,
+        false);
+
+    pluginViewport.setScrollBarThickness (
+        8);
+
+    pluginViewport.setColour (
+        juce::ScrollBar::thumbColourId,
+        ui::gray.withAlpha (0.34f));
+
+    pluginViewport.setColour (
+        juce::ScrollBar::backgroundColourId,
+        ui::viewport);
+
+    gesturePanel =
+        std::make_unique<
+            GesturePanel> (*this);
+
+    addAndMakeVisible (
+        *gesturePanel);
+
+    pluginBrowser =
+        std::make_unique<
+            PluginBrowserComponent> (
+            [this] (
+                int slotIndex,
+                const juce::PluginDescription&
+                    description)
+            {
+                if (embeddedCanvas != nullptr)
+                    embeddedCanvas->detach();
+
+                displayedChildIdentity = 0;
+                displayedSlot = -1;
+                lastNativeEditorSize = {};
+
+                processor.setSelectedSlot (
+                    slotIndex);
+
+                processor.loadPluginDescription (
+                    slotIndex,
+                    description);
+
+                updateSlotButtons();
+                updateEmbeddedEditor();
+                repaint();
+            },
+            [this]
+            {
+                hidePluginBrowser();
+            });
+
+    addAndMakeVisible (
+        *pluginBrowser);
+
+    pluginBrowser->setVisible (
+        false);
+
+    syncSlotButtons();
     updateSlotButtons();
     updateEmbeddedEditor();
+
     startTimerHz (30);
 }
 
@@ -620,26 +705,59 @@ void GestureRackAudioProcessorEditor::removeSelectedPlugin()
     repaint();
 }
 
-void GestureRackAudioProcessorEditor::filesDropped (const juce::StringArray& files, int x, int y)
+void GestureRackAudioProcessorEditor::filesDropped (
+    const juce::StringArray& files,
+    int x,
+    int y)
 {
-    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
-    int targetSlot = processor.getSelectedSlot();
-    for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
-        if (slotButtons[static_cast<size_t> (i)].getBounds().contains (x, y))
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    int targetSlot =
+        processor.getSelectedSlot();
+
+    for (int i = 0;
+         i < static_cast<int> (
+                 slotButtons.size());
+         ++i)
+        if (slotButtons[
+                static_cast<size_t> (i)]
+                ->isVisible()
+            && slotButtons[
+                   static_cast<size_t> (i)]
+                   ->getBounds()
+                   .contains (x, y))
         {
             targetSlot = i;
             break;
         }
 
+    if (addSlotButton.isVisible()
+        && addSlotButton
+               .getBounds()
+               .contains (x, y))
+        targetSlot =
+            processor.getAddSlotIndex();
+
     for (const auto& path : files)
-        if (path.endsWithIgnoreCase (".vst3"))
+        if (path.endsWithIgnoreCase (
+                ".vst3"))
         {
-            if (embeddedCanvas != nullptr) embeddedCanvas->detach();
+            if (embeddedCanvas != nullptr)
+                embeddedCanvas->detach();
+
             displayedChildIdentity = 0;
             displayedSlot = -1;
             lastNativeEditorSize = {};
-            processor.setSelectedSlot (targetSlot);
-            processor.loadVst3FromFile (targetSlot, juce::File (path));
+
+            processor.setSelectedSlot (
+                targetSlot);
+
+            processor.loadVst3FromFile (
+                targetSlot,
+                juce::File (path));
+
             updateSlotButtons();
             updateEmbeddedEditor();
             repaint();
@@ -761,16 +879,35 @@ void GestureRackAudioProcessorEditor::updateViewportScrollbars()
     pluginViewport.setScrollBarsShown (needVertical, needHorizontal, false, false);
 }
 
-void GestureRackAudioProcessorEditor::showPluginBrowserForSlot (int slotIndex)
+void GestureRackAudioProcessorEditor::showPluginBrowserForSlot (
+    int slotIndex)
 {
-    if (pluginBrowser == nullptr) return;
-    processor.setSelectedSlot (juce::jlimit (0, GestureRackAudioProcessor::slotCount - 1, slotIndex));
+    if (pluginBrowser == nullptr)
+        return;
+
+    const auto target =
+        juce::jlimit (
+            0,
+            processor.getAddSlotIndex(),
+            slotIndex);
+
+    processor.setSelectedSlot (
+        target);
+
     updateSlotButtons();
     updateEmbeddedEditor();
-    parameterInspector.clearGestureDragPreview();
+
+    parameterInspector
+        .clearGestureDragPreview();
+
     slotDragging = false;
-    slotDragSource = slotDragTarget = -1;
-    pluginBrowser->showForSlot (processor.getSelectedSlot());
+    slotDragSource =
+        slotDragTarget =
+            -1;
+
+    pluginBrowser->showForSlot (
+        target);
+
     repaint();
 }
 
@@ -890,95 +1027,356 @@ void GestureRackAudioProcessorEditor::setUiScale (float newScale)
              juce::jlimit (metrics::minimumEditorHeight, maxH, juce::roundToInt (getHeight() * ratio)));
 }
 
+void GestureRackAudioProcessorEditor::syncSlotButtons()
+{
+    const auto wanted =
+        processor.getChainSlotCount();
+
+    while (
+        static_cast<int> (
+            slotButtons.size())
+        < wanted)
+    {
+        const auto index =
+            static_cast<int> (
+                slotButtons.size());
+
+        auto button =
+            std::make_unique<
+                RackSlotButton>();
+
+        auto* raw =
+            button.get();
+
+        raw->bodyClick =
+            [this, index]
+            {
+                processor.setSelectedSlot (
+                    index);
+
+                updateSlotButtons();
+                updateEmbeddedEditor();
+                repaint();
+            };
+
+        raw->powerClick =
+            [this, index]
+            {
+                if (! processor.isSlotLoaded (
+                        index))
+                    return;
+
+                processor.setSlotBypassed (
+                    index,
+                    ! processor.isSlotBypassed (
+                        index));
+
+                updateSlotButtons();
+                repaint();
+            };
+
+        raw->dragDown =
+            [this, index] (
+                const juce::MouseEvent& e)
+            {
+                handleSlotMouseDown (
+                    index,
+                    e);
+            };
+
+        raw->dragMove =
+            [this] (
+                const juce::MouseEvent& e)
+            {
+                handleSlotMouseDrag (
+                    e);
+            };
+
+        raw->dragUp =
+            [this] (
+                const juce::MouseEvent& e)
+            {
+                handleSlotMouseUp (
+                    e);
+            };
+
+        addAndMakeVisible (
+            *raw);
+
+        slotButtons.push_back (
+            std::move (button));
+    }
+
+    while (
+        static_cast<int> (
+            slotButtons.size())
+        > wanted)
+    {
+        removeChildComponent (
+            slotButtons.back().get());
+
+        slotButtons.pop_back();
+    }
+
+    layoutPluginChain();
+}
+
 void GestureRackAudioProcessorEditor::updateSlotButtons()
 {
-    const auto selected = processor.getSelectedSlot();
-    for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
+    syncSlotButtons();
+
+    const auto selected =
+        processor.getSelectedSlot();
+
+    for (int i = 0;
+         i < static_cast<int> (
+                 slotButtons.size());
+         ++i)
     {
-        auto& button = slotButtons[static_cast<size_t> (i)];
-        auto name = processor.getSlotPluginName (i);
-        if (name.length() > 22) name = name.substring (0, 20) + "..";
-        button.setSlotVisualState (processor.isSlotLoaded (i), processor.isSlotBypassed (i), name);
-        button.setToggleState (i == selected, juce::dontSendNotification);
-        button.setTooltip (processor.isSlotLoaded (i) ? processor.getSlotPluginName (i) : "Load plugin");
+        auto& button =
+            *slotButtons[
+                static_cast<size_t> (i)];
+
+        auto name =
+            processor.getSlotPluginName (i);
+
+        if (name.length() > 22)
+            name =
+                name.substring (0, 20)
+                + "..";
+
+        button.setSlotVisualState (
+            processor.isSlotLoaded (i),
+            processor.isSlotBypassed (i),
+            name);
+
+        button.setToggleState (
+            i == selected,
+            juce::dontSendNotification);
+
+        auto tooltip =
+            processor.getSlotPluginName (i);
+
+        if (i
+            >= GestureRackAudioProcessor
+                   ::gestureControllableSlotCount)
+            tooltip +=
+                "  |  mouse-only (FX 11+)";
+
+        button.setTooltip (
+            tooltip);
     }
+
+    addSlotButton.setSlotVisualState (
+        false,
+        false,
+        {});
+
+    addSlotButton.setToggleState (
+        selected
+            == processor.getAddSlotIndex(),
+        juce::dontSendNotification);
+
+    layoutPluginChain();
 }
 
-void GestureRackAudioProcessorEditor::handleSlotMouseDown (int slotIndex, const juce::MouseEvent& e)
+void GestureRackAudioProcessorEditor::handleSlotMouseDown (
+    int slotIndex,
+    const juce::MouseEvent& e)
 {
-    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
-    if (! juce::isPositiveAndBelow (slotIndex, GestureRackAudioProcessor::slotCount)) return;
-    slotDragSource = slotDragTarget = slotIndex;
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! juce::isPositiveAndBelow (
+            slotIndex,
+            processor.getChainSlotCount()))
+        return;
+
+    slotDragSource =
+        slotDragTarget =
+            slotIndex;
+
     slotDragging = false;
-    slotDragOrigin = e.getEventRelativeTo (this).getPosition();
+
+    slotDragOrigin =
+        e.getEventRelativeTo (
+            this).getPosition();
 }
 
-void GestureRackAudioProcessorEditor::handleSlotMouseDrag (const juce::MouseEvent& e)
+void GestureRackAudioProcessorEditor::handleSlotMouseDrag (
+    const juce::MouseEvent& e)
 {
-    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
-    if (! juce::isPositiveAndBelow (slotDragSource, GestureRackAudioProcessor::slotCount)) return;
-    const auto point = e.getEventRelativeTo (this).getPosition();
-    const auto dx = point.x - slotDragOrigin.x;
-    const auto dy = point.y - slotDragOrigin.y;
-    if (! slotDragging && dx * dx + dy * dy < 36) return;
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! juce::isPositiveAndBelow (
+            slotDragSource,
+            processor.getChainSlotCount()))
+        return;
+
+    const auto point =
+        e.getEventRelativeTo (
+            this).getPosition();
+
+    const auto dx =
+        point.x
+        - slotDragOrigin.x;
+
+    const auto dy =
+        point.y
+        - slotDragOrigin.y;
+
+    if (! slotDragging
+        && dx * dx + dy * dy < 36)
+        return;
+
     slotDragging = true;
-    slotDragTarget = findNearestSlot (point);
+    slotDragTarget =
+        findNearestSlot (point);
+
     repaint();
 }
 
-void GestureRackAudioProcessorEditor::handleSlotMouseUp (const juce::MouseEvent& e)
+void GestureRackAudioProcessorEditor::handleSlotMouseUp (
+    const juce::MouseEvent& e)
 {
-    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
-    if (! juce::isPositiveAndBelow (slotDragSource, GestureRackAudioProcessor::slotCount)) return;
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! juce::isPositiveAndBelow (
+            slotDragSource,
+            processor.getChainSlotCount()))
+        return;
+
     if (slotDragging)
     {
-        const auto point = e.getEventRelativeTo (this).getPosition();
-        slotDragTarget = findNearestSlot (point);
-        if (slotDragTarget >= 0 && slotDragTarget != slotDragSource)
+        const auto point =
+            e.getEventRelativeTo (
+                this).getPosition();
+
+        slotDragTarget =
+            findNearestSlot (point);
+
+        if (slotDragTarget >= 0
+            && slotDragTarget
+                != slotDragSource)
         {
-            if (embeddedCanvas != nullptr) embeddedCanvas->detach();
+            if (embeddedCanvas != nullptr)
+                embeddedCanvas->detach();
+
             displayedChildIdentity = 0;
             displayedSlot = -1;
             lastNativeEditorSize = {};
-            processor.moveSlot (slotDragSource, slotDragTarget);
+
+            processor.moveSlot (
+                slotDragSource,
+                slotDragTarget);
+
             updateEmbeddedEditor();
         }
     }
+
     slotDragging = false;
-    slotDragSource = slotDragTarget = -1;
+    slotDragSource =
+        slotDragTarget =
+            -1;
+
     updateSlotButtons();
     repaint();
 }
 
-int GestureRackAudioProcessorEditor::findNearestSlot (juce::Point<int> editorPoint) const
+int GestureRackAudioProcessorEditor::findNearestSlot (
+    juce::Point<int> editorPoint) const
 {
-    auto rail = pluginRailBounds.expanded (18, 20);
-    if (! rail.contains (editorPoint)) return slotDragSource;
-    auto best = 0;
-    auto bestDistance = std::numeric_limits<int>::max();
-    for (int i = 0; i < GestureRackAudioProcessor::slotCount; ++i)
+    if (! pluginRailListBounds
+             .expanded (18, 12)
+             .contains (editorPoint))
+        return slotDragSource;
+
+    auto best =
+        slotDragSource;
+
+    auto bestDistance =
+        std::numeric_limits<int>::max();
+
+    for (int i = 0;
+         i < static_cast<int> (
+                 slotButtons.size());
+         ++i)
     {
-        const auto distance = std::abs (editorPoint.y - slotButtons[static_cast<size_t> (i)].getBounds().getCentreY());
+        const auto& button =
+            *slotButtons[
+                static_cast<size_t> (i)];
+
+        if (! button.isVisible())
+            continue;
+
+        const auto distance =
+            std::abs (
+                editorPoint.y
+                - button.getBounds()
+                      .getCentreY());
+
         if (distance < bestDistance)
         {
             bestDistance = distance;
             best = i;
         }
     }
+
     return best;
 }
 
-void GestureRackAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
+void GestureRackAudioProcessorEditor::paintOverChildren (
+    juce::Graphics& g)
 {
-    if (pluginBrowser != nullptr && pluginBrowser->isVisible()) return;
-    if (! slotDragging || ! juce::isPositiveAndBelow (slotDragTarget, GestureRackAudioProcessor::slotCount)) return;
-    const auto target = slotButtons[static_cast<size_t> (slotDragTarget)].getBounds();
-    auto line = juce::Rectangle<float> (static_cast<float> (target.getX() + 8),
-                                        static_cast<float> (target.getY() - 3),
-                                        static_cast<float> (target.getWidth() - 16), 2.0f);
-    if (slotDragTarget > slotDragSource) line.setY (static_cast<float> (target.getBottom() + 1));
-    g.setColour (ui::accent);
-    g.fillRoundedRectangle (line, 1.0f);
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! slotDragging
+        || ! juce::isPositiveAndBelow (
+            slotDragTarget,
+            static_cast<int> (
+                slotButtons.size())))
+        return;
+
+    const auto& targetButton =
+        *slotButtons[
+            static_cast<size_t> (
+                slotDragTarget)];
+
+    if (! targetButton.isVisible())
+        return;
+
+    const auto target =
+        targetButton.getBounds();
+
+    auto line =
+        juce::Rectangle<float> (
+            static_cast<float> (
+                target.getX() + 8),
+            static_cast<float> (
+                target.getY() - 3),
+            static_cast<float> (
+                target.getWidth() - 16),
+            2.0f);
+
+    if (slotDragTarget
+        > slotDragSource)
+        line.setY (
+            static_cast<float> (
+                target.getBottom() + 1));
+
+    g.setColour (
+        ui::accent);
+
+    g.fillRoundedRectangle (
+        line,
+        1.0f);
 }
 
 void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
@@ -1184,6 +1582,152 @@ void GestureRackAudioProcessorEditor::drawCameraMotionTelemetry (juce::Graphics&
     drawAxis ("Y  VERTICAL", snapshot.right.height);
 }
 
+void GestureRackAudioProcessorEditor::layoutPluginChain()
+{
+    if (pluginRailListBounds.isEmpty())
+        return;
+
+    const auto slotHeight =
+        scaledMetric (
+            uiScale,
+            58);
+
+    const auto slotGap =
+        scaledMetric (
+            uiScale,
+            7);
+
+    const auto rowCount =
+        static_cast<int> (
+            slotButtons.size())
+        + 1;
+
+    const auto contentHeight =
+        rowCount * slotHeight
+        + juce::jmax (
+            0,
+            rowCount - 1)
+            * slotGap;
+
+    const auto maxScroll =
+        juce::jmax (
+            0,
+            contentHeight
+            - pluginRailListBounds
+                  .getHeight());
+
+    chainScrollOffset =
+        juce::jlimit (
+            0,
+            maxScroll,
+            chainScrollOffset);
+
+    auto y =
+        pluginRailListBounds.getY()
+        - chainScrollOffset;
+
+    for (auto& button :
+         slotButtons)
+    {
+        const auto bounds =
+            juce::Rectangle<int> (
+                pluginRailListBounds
+                    .getX(),
+                y,
+                pluginRailListBounds
+                    .getWidth(),
+                slotHeight);
+
+        button->setBounds (
+            bounds);
+
+        button->setVisible (
+            bounds.intersects (
+                pluginRailListBounds));
+
+        y +=
+            slotHeight
+            + slotGap;
+    }
+
+    const auto addBounds =
+        juce::Rectangle<int> (
+            pluginRailListBounds
+                .getX(),
+            y,
+            pluginRailListBounds
+                .getWidth(),
+            slotHeight);
+
+    addSlotButton.setBounds (
+        addBounds);
+
+    addSlotButton.setVisible (
+        addBounds.intersects (
+            pluginRailListBounds));
+}
+
+void GestureRackAudioProcessorEditor::mouseWheelMove (
+    const juce::MouseEvent& e,
+    const juce::MouseWheelDetails& wheel)
+{
+    if (pluginRailListBounds.contains (
+            e.getPosition()))
+    {
+        const auto slotHeight =
+            scaledMetric (
+                uiScale,
+                58);
+
+        const auto slotGap =
+            scaledMetric (
+                uiScale,
+                7);
+
+        const auto rowCount =
+            static_cast<int> (
+                slotButtons.size())
+            + 1;
+
+        const auto contentHeight =
+            rowCount * slotHeight
+            + juce::jmax (
+                0,
+                rowCount - 1)
+                * slotGap;
+
+        const auto maxScroll =
+            juce::jmax (
+                0,
+                contentHeight
+                - pluginRailListBounds
+                      .getHeight());
+
+        const auto delta =
+            juce::roundToInt (
+                -wheel.deltaY
+                * static_cast<float> (
+                    slotHeight * 3));
+
+        chainScrollOffset =
+            juce::jlimit (
+                0,
+                maxScroll,
+                chainScrollOffset
+                + delta);
+
+        layoutPluginChain();
+        repaint (
+            pluginRailBounds);
+        return;
+    }
+
+    juce::AudioProcessorEditor
+        ::mouseWheelMove (
+            e,
+            wheel);
+}
+
 void GestureRackAudioProcessorEditor::resized()
 {
     const auto outer = scaledMetric (uiScale, metrics::outerMargin);
@@ -1223,16 +1767,13 @@ void GestureRackAudioProcessorEditor::resized()
 
     auto railContent = pluginRailBounds.reduced (scaledMetric (uiScale, 14));
     auto railHeader = railContent.removeFromTop (scaledMetric (uiScale, 28));
-    railSearchButton.setBounds (railHeader.removeFromRight (scaledMetric (uiScale, 30)));
-    railContent.removeFromTop (scaledMetric (uiScale, 8));
-    const auto slotGap = scaledMetric (uiScale, 7);
-    const auto available = juce::jmax (1, railContent.getHeight() - slotGap * (GestureRackAudioProcessor::slotCount - 1));
-    const auto slotHeight = juce::jmax (38, available / GestureRackAudioProcessor::slotCount);
-    for (auto& button : slotButtons)
-    {
-        button.setBounds (railContent.removeFromTop (slotHeight));
-        railContent.removeFromTop (slotGap);
-    }
+    railSearchButton.setBounds (
+        railHeader.removeFromRight (
+            scaledMetric (uiScale, 30)));
+    railContent.removeFromTop (
+        scaledMetric (uiScale, 8));
+    pluginRailListBounds = railContent;
+    layoutPluginChain();
 
     auto pluginContent = pluginPanelBounds.reduced (scaledMetric (uiScale, 12));
     auto pluginChrome = pluginContent.removeFromTop (scaledMetric (uiScale, 36));

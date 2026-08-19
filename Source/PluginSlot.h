@@ -17,6 +17,20 @@ public:
     int getIndex() const noexcept { return slotIndex; }
     void setIndexForReorder (int newIndex);
 
+    uint64_t getStableId() const noexcept { return stableId; }
+    uint64_t beginLoad() noexcept
+    {
+        return loadGeneration.fetch_add (1, std::memory_order_relaxed) + 1;
+    }
+    void invalidatePendingLoads() noexcept
+    {
+        loadGeneration.fetch_add (1, std::memory_order_relaxed);
+    }
+    bool isLoadGenerationCurrent (uint64_t generation) const noexcept
+    {
+        return loadGeneration.load (std::memory_order_relaxed) == generation;
+    }
+
     bool hasPlugin() const noexcept { return graphNode != nullptr && description.has_value(); }
     bool isBypassed() const noexcept { return requestedBypass.load (std::memory_order_relaxed); }
     void setBypassed (bool shouldBypass) noexcept
@@ -51,7 +65,11 @@ public:
     int getMappingCount (ControlGesture gesture) const;
 
 private:
+    static std::atomic<uint64_t> nextStableId;
+
     int slotIndex = 0;
+    const uint64_t stableId;
+    std::atomic<uint64_t> loadGeneration { 0 };
     std::optional<juce::PluginDescription> description;
     juce::AudioProcessorGraph::Node::Ptr graphNode;
     std::atomic<bool> requestedBypass { false };

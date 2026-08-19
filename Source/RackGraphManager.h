@@ -1,8 +1,8 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <array>
 #include <memory>
+#include <vector>
 #include <cstdint>
 #include "PluginSlot.h"
 
@@ -11,13 +11,12 @@ namespace gr
 class RackGraphManager final
 {
 public:
-    static constexpr int slotCount = 9;
     static constexpr int maxRackLatencySamples =
-        GestureBypassWrapper::maxCompensatedLatencySamples * slotCount;
+        GestureBypassWrapper::maxCompensatedLatencySamples * 10;
 
-    using SlotArray = std::array<std::unique_ptr<PluginSlot>, slotCount>;
+    using SlotList = std::vector<std::unique_ptr<PluginSlot>>;
 
-    RackGraphManager (juce::AudioProcessorGraph& graphToUse, SlotArray& slotsToUse) noexcept;
+    RackGraphManager (juce::AudioProcessorGraph& graphToUse, SlotList& slotsToUse) noexcept;
 
     void initialise (int numAudioChannels);
     void clear();
@@ -37,11 +36,13 @@ public:
 private:
     bool isValidSlotIndex (int slotIndex) const noexcept
     {
-        return slotIndex >= 0 && slotIndex < slotCount;
+        return slotIndex >= 0
+            && slotIndex < static_cast<int> (slots.size())
+            && slots[static_cast<size_t> (slotIndex)] != nullptr;
     }
 
     juce::AudioProcessorGraph& graph;
-    SlotArray& slots;
+    SlotList& slots;
     juce::AudioProcessorGraph::Node::Ptr inputNode;
     juce::AudioProcessorGraph::Node::Ptr outputNode;
     juce::AudioProcessorGraph::Node::Ptr midiInputNode;

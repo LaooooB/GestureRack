@@ -4,6 +4,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <vector>
 #include "PluginProcessor.h"
 #include "ParameterInspector.h"
 #include "VisionFrameReader.h"
@@ -24,6 +25,8 @@ public:
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
+    void mouseWheelMove (const juce::MouseEvent&,
+                         const juce::MouseWheelDetails&) override;
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
@@ -77,7 +80,9 @@ private:
     void showMainMenu();
     void showPluginMoreMenu();
     void setUiScale (float newScale);
+    void syncSlotButtons();
     void updateSlotButtons();
+    void layoutPluginChain();
     void updateEmbeddedEditor();
     void updateViewportScrollbars();
     void adaptEditorToNativeSize (bool force = false);
@@ -93,7 +98,8 @@ private:
     void removeSelectedPlugin();
 
     GestureRackAudioProcessor& processor;
-    std::array<RackSlotButton, GestureRackAudioProcessor::slotCount> slotButtons;
+    std::vector<std::unique_ptr<RackSlotButton>> slotButtons;
+    RackSlotButton addSlotButton;
 
     int slotDragSource = -1;
     int slotDragTarget = -1;
@@ -127,6 +133,8 @@ private:
 
     juce::Rectangle<int> topBarBounds;
     juce::Rectangle<int> pluginRailBounds;
+    juce::Rectangle<int> pluginRailListBounds;
+    int chainScrollOffset = 0;
     juce::Rectangle<int> pluginPanelBounds;
     juce::Rectangle<int> pluginViewportBounds;
     juce::Rectangle<int> cameraPanelBounds;

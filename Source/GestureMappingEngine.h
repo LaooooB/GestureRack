@@ -13,7 +13,7 @@ namespace gr
 class GestureMappingEngine final
 {
 public:
-    explicit GestureMappingEngine (RackGraphManager::SlotArray& slotsToUse) noexcept;
+    explicit GestureMappingEngine (RackGraphManager::SlotList& slotsToUse) noexcept;
 
     std::vector<ParameterDescriptor> enumerateParameters (int slotIndex) const;
     std::vector<GestureBinding> getMappings (int slotIndex) const;
@@ -75,7 +75,7 @@ private:
     void writeParameter (juce::AudioProcessorParameter& parameter, float normalizedValue);
     float discreteStepDelta (const juce::AudioProcessorParameter& parameter) const noexcept;
 
-    RackGraphManager::SlotArray& slots;
+    RackGraphManager::SlotList& slots;
     std::map<std::string, RuntimeState> runtimeStates;
     std::atomic<int> internalWriteDepth { 0 };
 };

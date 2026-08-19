@@ -3,6 +3,8 @@
 
 namespace gr
 {
+std::atomic<uint64_t> PluginSlot::nextStableId { 1 };
+
 namespace
 {
 bool sameParameterTarget (const GestureBinding& a, const GestureBinding& b)
@@ -21,7 +23,8 @@ bool sameParameterTarget (const GestureBinding& a, const GestureBinding& b)
 }
 
 PluginSlot::PluginSlot (int indexToUse) noexcept
-    : slotIndex (indexToUse)
+    : slotIndex (indexToUse),
+      stableId (nextStableId.fetch_add (1, std::memory_order_relaxed))
 {
 }
 
