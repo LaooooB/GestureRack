@@ -1,0 +1,514 @@
+    addAndMakeVisible (settingsButton);
+    addAndMakeVisible (menuButton);
+
+    railSearchButton.onClick =
+        [this]
+        {
+            showPluginBrowser();
+        };
+
+    removeButton.onClick =
+        [this]
+        {
+            removeSelectedPlugin();
+        };
+
+    bypassButton.onClick =
+        [this]
+        {
+            const auto slot =
+                processor.getSelectedSlot();
+
+            if (! processor.isSlotLoaded (
+                    slot))
+                return;
+
+            processor.setSlotBypassed (
+                slot,
+                ! processor.isSlotBypassed (
+                    slot));
+
+            updateSlotButtons();
+            repaint();
+        };
+
+    pluginMoreButton.onClick =
+        [this]
+        {
+            showPluginMoreMenu();
+        };
+
+    swapHandsButton.onClick =
+        [this]
+        {
+            processor.toggleSwapHandedness();
+        };
+
+    settingsButton.onClick =
+        [this]
+        {
+            showSettingsMenu();
+        };
+
+    menuButton.onClick =
+        [this]
+        {
+            showMainMenu();
+        };
+
+    settingsButton.setAccentWhenOn (false);
+    menuButton.setAccentWhenOn (false);
+    railSearchButton.setAccentWhenOn (false);
+    removeButton.setAccentWhenOn (false);
+    pluginMoreButton.setAccentWhenOn (false);
+
+    addAndMakeVisible (
+        parameterInspector);
+
+    embeddedCanvas =
+        std::make_unique<
+            EmbeddedEditorCanvas>();
+
+    addAndMakeVisible (
+        pluginViewport);
+
+    pluginViewport.setViewedComponent (
+        embeddedCanvas.get(),
+        false);
+
+    pluginViewport.setScrollBarsShown (
+        false,
+        false);
+
+    pluginViewport.setScrollBarThickness (
+        8);
+
+    pluginViewport.setColour (
+        juce::ScrollBar::thumbColourId,
+        ui::gray.withAlpha (0.34f));
+
+    pluginViewport.setColour (
+        juce::ScrollBar::backgroundColourId,
+        ui::viewport);
+
+    gesturePanel =
+        std::make_unique<
+            GesturePanel> (*this);
+
+    addAndMakeVisible (
+        *gesturePanel);
+
+    pluginBrowser =
+        std::make_unique<
+            PluginBrowserComponent> (
+            [this] (
+                int slotIndex,
+                const juce::PluginDescription&
+                    description)
+            {
+                if (embeddedCanvas != nullptr)
+                    embeddedCanvas->detach();
+
+                displayedChildIdentity = 0;
+                displayedSlot = -1;
+                lastNativeEditorSize = {};
+
+                processor.setSelectedSlot (
+                    slotIndex);
+
+                processor.loadPluginDescription (
+                    slotIndex,
+                    description);
+
+                updateSlotButtons();
+                updateEmbeddedEditor();
+                repaint();
+            },
+            [this]
+            {
+                hidePluginBrowser();
+            });
+
+    addAndMakeVisible (
+        *pluginBrowser);
+
+    pluginBrowser->setVisible (
+        false);
+
+    syncSlotButtons();
+    updateSlotButtons();
+    updateEmbeddedEditor();
+
+    startTimerHz (30);
+}''')
+
+replace_between("Source/PluginEditor.cpp",
+                "void GestureRackAudioProcessorEditor::updateSlotButtons()",
+                "void GestureRackAudioProcessorEditor::handleSlotMouseDown",
+r'''void GestureRackAudioProcessorEditor::syncSlotButtons()
+{
+    const auto wanted =
+        processor.getChainSlotCount();
+
+    while (
+        static_cast<int> (
+            slotButtons.size())
+        < wanted)
+    {
+        const auto index =
+            static_cast<int> (
+                slotButtons.size());
+
+        auto button =
+            std::make_unique<
+                RackSlotButton>();
+
+        auto* raw =
+            button.get();
+
+        raw->bodyClick =
+            [this, index]
+            {
+                processor.setSelectedSlot (
+                    index);
+
+                updateSlotButtons();
+                updateEmbeddedEditor();
+                repaint();
+            };
+
+        raw->powerClick =
+            [this, index]
+            {
+                if (! processor.isSlotLoaded (
+                        index))
+                    return;
+
+                processor.setSlotBypassed (
+                    index,
+                    ! processor.isSlotBypassed (
+                        index));
+
+                updateSlotButtons();
+                repaint();
+            };
+
+        raw->dragDown =
+            [this, index] (
+                const juce::MouseEvent& e)
+            {
+                handleSlotMouseDown (
+                    index,
+                    e);
+            };
+
+        raw->dragMove =
+            [this] (
+                const juce::MouseEvent& e)
+            {
+                handleSlotMouseDrag (
+                    e);
+            };
+
+        raw->dragUp =
+            [this] (
+                const juce::MouseEvent& e)
+            {
+                handleSlotMouseUp (
+                    e);
+            };
+
+        addAndMakeVisible (
+            *raw);
+
+        slotButtons.push_back (
+            std::move (button));
+    }
+
+    while (
+        static_cast<int> (
+            slotButtons.size())
+        > wanted)
+    {
+        removeChildComponent (
+            slotButtons.back().get());
+
+        slotButtons.pop_back();
+    }
+
+    layoutPluginChain();
+}
+
+void GestureRackAudioProcessorEditor::updateSlotButtons()
+{
+    syncSlotButtons();
+
+    const auto selected =
+        processor.getSelectedSlot();
+
+    for (int i = 0;
+         i < static_cast<int> (
+                 slotButtons.size());
+         ++i)
+    {
+        auto& button =
+            *slotButtons[
+                static_cast<size_t> (i)];
+
+        auto name =
+            processor.getSlotPluginName (i);
+
+        if (name.length() > 22)
+            name =
+                name.substring (0, 20)
+                + "..";
+
+        button.setSlotVisualState (
+            processor.isSlotLoaded (i),
+            processor.isSlotBypassed (i),
+            name);
+
+        button.setToggleState (
+            i == selected,
+            juce::dontSendNotification);
+
+        auto tooltip =
+            processor.getSlotPluginName (i);
+
+        if (i
+            >= GestureRackAudioProcessor
+                   ::gestureControllableSlotCount)
+            tooltip +=
+                "  |  mouse-only (FX 11+)";
+
+        button.setTooltip (
+            tooltip);
+    }
+
+    addSlotButton.setSlotVisualState (
+        false,
+        false,
+        {});
+
+    addSlotButton.setToggleState (
+        selected
+            == processor.getAddSlotIndex(),
+        juce::dontSendNotification);
+
+    layoutPluginChain();
+}''')
+
+replace_between("Source/PluginEditor.cpp",
+                "void GestureRackAudioProcessorEditor::handleSlotMouseDown",
+                "void GestureRackAudioProcessorEditor::handleSlotMouseDrag",
+r'''void GestureRackAudioProcessorEditor::handleSlotMouseDown (
+    int slotIndex,
+    const juce::MouseEvent& e)
+{
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! juce::isPositiveAndBelow (
+            slotIndex,
+            processor.getChainSlotCount()))
+        return;
+
+    slotDragSource =
+        slotDragTarget =
+            slotIndex;
+
+    slotDragging = false;
+
+    slotDragOrigin =
+        e.getEventRelativeTo (
+            this).getPosition();
+}''')
+
+replace_between("Source/PluginEditor.cpp",
+                "void GestureRackAudioProcessorEditor::handleSlotMouseDrag",
+                "void GestureRackAudioProcessorEditor::handleSlotMouseUp",
+r'''void GestureRackAudioProcessorEditor::handleSlotMouseDrag (
+    const juce::MouseEvent& e)
+{
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! juce::isPositiveAndBelow (
+            slotDragSource,
+            processor.getChainSlotCount()))
+        return;
+
+    const auto point =
+        e.getEventRelativeTo (
+            this).getPosition();
+
+    const auto dx =
+        point.x
+        - slotDragOrigin.x;
+
+    const auto dy =
+        point.y
+        - slotDragOrigin.y;
+
+    if (! slotDragging
+        && dx * dx + dy * dy < 36)
+        return;
+
+    slotDragging = true;
+    slotDragTarget =
+        findNearestSlot (point);
+
+    repaint();
+}''')
+
+replace_between("Source/PluginEditor.cpp",
+                "void GestureRackAudioProcessorEditor::handleSlotMouseUp",
+                "int GestureRackAudioProcessorEditor::findNearestSlot",
+r'''void GestureRackAudioProcessorEditor::handleSlotMouseUp (
+    const juce::MouseEvent& e)
+{
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! juce::isPositiveAndBelow (
+            slotDragSource,
+            processor.getChainSlotCount()))
+        return;
+
+    if (slotDragging)
+    {
+        const auto point =
+            e.getEventRelativeTo (
+                this).getPosition();
+
+        slotDragTarget =
+            findNearestSlot (point);
+
+        if (slotDragTarget >= 0
+            && slotDragTarget
+                != slotDragSource)
+        {
+            if (embeddedCanvas != nullptr)
+                embeddedCanvas->detach();
+
+            displayedChildIdentity = 0;
+            displayedSlot = -1;
+            lastNativeEditorSize = {};
+
+            processor.moveSlot (
+                slotDragSource,
+                slotDragTarget);
+
+            updateEmbeddedEditor();
+        }
+    }
+
+    slotDragging = false;
+    slotDragSource =
+        slotDragTarget =
+            -1;
+
+    updateSlotButtons();
+    repaint();
+}''')
+
+replace_between("Source/PluginEditor.cpp",
+                "int GestureRackAudioProcessorEditor::findNearestSlot",
+                "void GestureRackAudioProcessorEditor::paintOverChildren",
+r'''int GestureRackAudioProcessorEditor::findNearestSlot (
+    juce::Point<int> editorPoint) const
+{
+    if (! pluginRailListBounds
+             .expanded (18, 12)
+             .contains (editorPoint))
+        return slotDragSource;
+
+    auto best =
+        slotDragSource;
+
+    auto bestDistance =
+        std::numeric_limits<int>::max();
+
+    for (int i = 0;
+         i < static_cast<int> (
+                 slotButtons.size());
+         ++i)
+    {
+        const auto& button =
+            *slotButtons[
+                static_cast<size_t> (i)];
+
+        if (! button.isVisible())
+            continue;
+
+        const auto distance =
+            std::abs (
+                editorPoint.y
+                - button.getBounds()
+                      .getCentreY());
+
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = i;
+        }
+    }
+
+    return best;
+}''')
+
+replace_between("Source/PluginEditor.cpp",
+                "void GestureRackAudioProcessorEditor::paintOverChildren",
+                "void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)",
+r'''void GestureRackAudioProcessorEditor::paintOverChildren (
+    juce::Graphics& g)
+{
+    if (pluginBrowser != nullptr
+        && pluginBrowser->isVisible())
+        return;
+
+    if (! slotDragging
+        || ! juce::isPositiveAndBelow (
+            slotDragTarget,
+            static_cast<int> (
+                slotButtons.size())))
+        return;
+
+    const auto& targetButton =
+        *slotButtons[
+            static_cast<size_t> (
+                slotDragTarget)];
+
+    if (! targetButton.isVisible())
+        return;
+
+    const auto target =
+        targetButton.getBounds();
+
+    auto line =
+        juce::Rectangle<float> (
+            static_cast<float> (
+                target.getX() + 8),
+            static_cast<float> (
+                target.getY() - 3),
+            static_cast<float> (
+                target.getWidth() - 16),
+            2.0f);
+
+    if (slotDragTarget
+        > slotDragSource)
+        line.setY (
+            static_cast<float> (
+                target.getBottom() + 1));
+
+    g.setColour (
+        ui::accent);
+
+    g.fillRoundedRectangle (
+        line,
+        1.0f);
+}''')
+
