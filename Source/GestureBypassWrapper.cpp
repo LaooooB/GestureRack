@@ -1,4 +1,5 @@
 #include "GestureBypassWrapper.h"
+#include <cmath>
 
 namespace
 {
@@ -13,20 +14,22 @@ AudioProcessorBusAccess::BusesProperties makeBridgeBuses (
     const juce::AudioChannelSet& sidechainSet,
     const gr::HostedPluginCapabilities& capabilities)
 {
-    if (capabilities.sidechainInputBus >= 1)
-    {
-        const auto bridgeSidechain = sidechainSet.isDisabled()
-            ? juce::AudioChannelSet::stereo() : sidechainSet;
-
-        return AudioProcessorBusAccess::BusesProperties()
-            .withInput ("Input", inputSet, true)
-            .withInput ("Sidechain", bridgeSidechain, true)
-            .withOutput ("Output", outputSet, true);
-    }
-
-    return AudioProcessorBusAccess::BusesProperties()
+    auto buses = AudioProcessorBusAccess::BusesProperties()
         .withInput ("Input", inputSet, true)
         .withOutput ("Output", outputSet, true);
+
+    if (capabilities.availableSidechainInputBus >= 1)
+    {
+        const auto bridgeSidechain = sidechainSet.isDisabled()
+            ? juce::AudioChannelSet::stereo()
+            : sidechainSet;
+
+        buses = buses.withInput ("Sidechain",
+                                 bridgeSidechain,
+                                 capabilities.sidechainInputBus >= 1);
+    }
+
+    return buses;
 }
 
 bool isRackMainLayout (const juce::AudioChannelSet& set)
@@ -98,14 +101,50 @@ void copyAdapted (const juce::AudioBuffer<float>& source,
         return;
     }
 
-    const auto commonChannels =
-        juce::jmin (sourceChannels, destinationChannels);
-
+    const auto commonChannels = juce::jmin (sourceChannels, destinationChannels);
     for (int channel = 0; channel < commonChannels; ++channel)
         destination.copyFrom (channel, 0, source, channel, 0, samples);
 
     for (int channel = commonChannels; channel < destinationChannels; ++channel)
         destination.copyFrom (channel, 0, source, commonChannels - 1, 0, samples);
+}
+
+void copySameLayoutWithoutClearingSource (const juce::AudioBuffer<float>& source,
+                                          juce::AudioBuffer<float>& destination,
+                                          int samples)
+{
+    const auto common = juce::jmin (source.getNumChannels(), destination.getNumChannels());
+    for (int channel = 0; channel < common; ++channel)
+    {
+        if (source.getReadPointer (channel) != destination.getWritePointer (channel))
+            destination.copyFrom (channel, 0, source, channel, 0, samples);
+    }
+
+    for (int channel = common; channel < destination.getNumChannels(); ++channel)
+        destination.clear (channel, 0, samples);
+}
+
+float finitePeak (const juce::AudioBuffer<float>& buffer, int samples, bool& allFinite) noexcept
+{
+    float peak = 0.0f;
+    allFinite = true;
+
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    {
+        const auto* data = buffer.getReadPointer (channel);
+        for (int sample = 0; sample < samples; ++sample)
+        {
+            const auto value = data[sample];
+            if (! std::isfinite (value))
+            {
+                allFinite = false;
+                continue;
+            }
+            peak = juce::jmax (peak, std::abs (value));
+        }
+    }
+
+    return peak;
 }
 }
 
@@ -135,12 +174,27 @@ bool GestureBypassWrapper::configureChildForHosting (
         return false;
     }
 
-    capabilities.nonMainBusesDisabled = child.disableNonMainBuses();
+    child.disableNonMainBuses();
+    bool allNonMainDisabled = true;
+
+    for (const auto isInput : { true, false })
+    {
+        for (int busIndex = 1; busIndex < child.getBusCount (isInput); ++busIndex)
+        {
+            auto* bus = child.getBus (isInput, busIndex);
+            if (bus == nullptr)
+                continue;
+
+            if (bus->isEnabled() && ! bus->enable (false))
+                allNonMainDisabled = false;
+        }
+    }
+
+    capabilities.nonMainBusesDisabled = allNonMainDisabled;
 
     bool mainInputConfigured = false;
     if (capabilities.inputBusCount > 0)
-        mainInputConfigured =
-            configureMainBus (child, true, requestedMainInput);
+        mainInputConfigured = configureMainBus (child, true, requestedMainInput);
 
     if (! mainInputConfigured && ! allowZeroMainInput)
     {
@@ -169,58 +223,44 @@ bool GestureBypassWrapper::configureChildForHosting (
         return false;
     }
 
-    if (mainInputConfigured)
+    if (mainInputConfigured && child.getBusCount (true) > 1)
+        capabilities.availableSidechainInputBus = 1;
+
+    if (capabilities.availableSidechainInputBus >= 1
+        && ! hostSidechainLayout.isDisabled())
     {
-        const auto preferredSidechain = hostSidechainLayout.isDisabled()
-            ? juce::AudioChannelSet::stereo()
-            : hostSidechainLayout;
+        const auto busIndex = capabilities.availableSidechainInputBus;
+        auto* bus = child.getBus (true, busIndex);
+        bool configured = bus != nullptr && bus->enable (true);
 
-        for (int busIndex = 1; busIndex < child.getBusCount (true); ++busIndex)
+        if (configured)
         {
-            auto* bus = child.getBus (true, busIndex);
-            if (bus == nullptr || ! bus->enable (true))
-                continue;
-
-            auto configured =
-                child.setChannelLayoutOfBus (true, busIndex, preferredSidechain);
-
+            configured = child.setChannelLayoutOfBus (true, busIndex, hostSidechainLayout);
             if (! configured)
             {
-                auto current = child.getChannelLayoutOfBus (true, busIndex);
+                const auto current = child.getChannelLayoutOfBus (true, busIndex);
                 configured = isRackMainLayout (current);
-
-                if (! configured)
-                    for (const auto fallback : {
-                             juce::AudioChannelSet::stereo(),
-                             juce::AudioChannelSet::mono() })
-                        if (child.setChannelLayoutOfBus (
-                                true, busIndex, fallback))
-                        {
-                            configured = true;
-                            break;
-                        }
             }
+        }
 
-            if (configured)
-            {
-                capabilities.sidechainInputBus = busIndex;
-                capabilities.sidechainInputChannels =
-                    child.getChannelCountOfBus (true, busIndex);
-                break;
-            }
-
+        if (configured)
+        {
+            capabilities.sidechainInputBus = busIndex;
+            capabilities.sidechainInputChannels = child.getChannelCountOfBus (true, busIndex);
+        }
+        else if (bus != nullptr)
+        {
             bus->enable (false);
         }
     }
 
-    capabilities.auxiliaryOutputBusCount =
-        juce::jmax (0, child.getBusCount (false) - 1);
-
-    for (int busIndex = 1;
-         busIndex < child.getBusCount (false); ++busIndex)
-        if (auto* bus = child.getBus (false, busIndex);
-            bus != nullptr && bus->isEnabled())
+    capabilities.auxiliaryOutputBusCount = juce::jmax (0, child.getBusCount (false) - 1);
+    for (int busIndex = 1; busIndex < child.getBusCount (false); ++busIndex)
+    {
+        auto* bus = child.getBus (false, busIndex);
+        if (bus != nullptr && bus->isEnabled())
             ++capabilities.activeAuxiliaryOutputBusCount;
+    }
 
     return true;
 }
@@ -230,23 +270,50 @@ GestureBypassWrapper::GestureBypassWrapper (
     const juce::AudioChannelSet& inputSet,
     const juce::AudioChannelSet& outputSet,
     const juce::AudioChannelSet& hostSidechainSet,
+    bool allowZeroMainInputToUse,
     HostedPluginCapabilities capabilitiesToUse,
     std::atomic<bool>& requestedBypassState)
-    : juce::AudioProcessor (
-          makeBridgeBuses (
-              inputSet, outputSet, hostSidechainSet,
-              capabilitiesToUse)),
+    : juce::AudioProcessor (makeBridgeBuses (inputSet, outputSet, hostSidechainSet,
+                                             capabilitiesToUse)),
       child (std::move (childToOwn)),
       capabilities (std::move (capabilitiesToUse)),
-      requestedBypass (requestedBypassState)
+      requestedBypass (requestedBypassState),
+      requestedMainInput (inputSet),
+      requestedMainOutput (outputSet),
+      configuredHostSidechain (hostSidechainSet),
+      allowZeroMainInput (allowZeroMainInputToUse)
 {
+    configuredTopology = captureChildTopology();
+    updateTopologyTelemetry (configuredTopology);
 }
 
 GestureBypassWrapper::~GestureBypassWrapper()
 {
     embeddedEditor.reset();
+    const juce::SpinLock::ScopedLockType lock (topologyLock);
     if (childPrepared && child != nullptr)
         child->releaseResources();
+}
+
+HostedPluginTelemetry GestureBypassWrapper::getTelemetry() const noexcept
+{
+    HostedPluginTelemetry result;
+    result.inputPeak = telemetryInputPeak.load (std::memory_order_relaxed);
+    result.outputPeak = telemetryOutputPeak.load (std::memory_order_relaxed);
+    result.processMicros = telemetryProcessMicros.load (std::memory_order_relaxed);
+    result.safetyTripCount = telemetrySafetyTripCount.load (std::memory_order_relaxed);
+    result.topologyMismatchCount = telemetryTopologyMismatchCount.load (std::memory_order_relaxed);
+    result.inputBusCount = telemetryInputBusCount.load (std::memory_order_relaxed);
+    result.outputBusCount = telemetryOutputBusCount.load (std::memory_order_relaxed);
+    result.totalInputChannels = telemetryTotalInputChannels.load (std::memory_order_relaxed);
+    result.totalOutputChannels = telemetryTotalOutputChannels.load (std::memory_order_relaxed);
+    result.activeAuxiliaryOutputBusCount = telemetryActiveAuxiliaryOutputs.load (std::memory_order_relaxed);
+    result.sidechainActive = telemetrySidechainActive.load (std::memory_order_relaxed);
+    result.topologyPending = telemetryTopologyPending.load (std::memory_order_relaxed);
+    result.safetyActive = telemetrySafetyActive.load (std::memory_order_relaxed);
+    result.lastSafetyReason = static_cast<HostedSafetyReason> (
+        telemetryLastSafetyReason.load (std::memory_order_relaxed));
+    return result;
 }
 
 int GestureBypassWrapper::getChildLatencySamples() const noexcept
@@ -254,313 +321,429 @@ int GestureBypassWrapper::getChildLatencySamples() const noexcept
     return child != nullptr ? child->getLatencySamples() : 0;
 }
 
-juce::AudioProcessorEditor*
-GestureBypassWrapper::getOrCreateEmbeddedEditor()
+GestureBypassWrapper::BusTopologySnapshot
+GestureBypassWrapper::captureChildTopology() const noexcept
 {
-    jassert (
-        juce::MessageManager::getInstance()->isThisTheMessageThread());
+    BusTopologySnapshot topology;
+    if (child == nullptr)
+        return topology;
 
+    topology.inputBusCount = child->getBusCount (true);
+    topology.outputBusCount = child->getBusCount (false);
+    topology.totalInputChannels = child->getTotalNumInputChannels();
+    topology.totalOutputChannels = child->getTotalNumOutputChannels();
+    topology.mainInputChannels = child->getMainBusNumInputChannels();
+    topology.mainOutputChannels = child->getMainBusNumOutputChannels();
+
+    for (int busIndex = 1; busIndex < child->getBusCount (true); ++busIndex)
+    {
+        auto* bus = child->getBus (true, busIndex);
+        if (bus != nullptr && bus->isEnabled())
+            topology.activeNonMainInputChannels += child->getChannelCountOfBus (true, busIndex);
+    }
+
+    for (int busIndex = 1; busIndex < child->getBusCount (false); ++busIndex)
+    {
+        auto* bus = child->getBus (false, busIndex);
+        if (bus != nullptr && bus->isEnabled())
+            topology.activeNonMainOutputChannels += child->getChannelCountOfBus (false, busIndex);
+    }
+
+    return topology;
+}
+
+void GestureBypassWrapper::updateTopologyTelemetry (const BusTopologySnapshot& topology) noexcept
+{
+    telemetryInputBusCount.store (topology.inputBusCount, std::memory_order_relaxed);
+    telemetryOutputBusCount.store (topology.outputBusCount, std::memory_order_relaxed);
+    telemetryTotalInputChannels.store (topology.totalInputChannels, std::memory_order_relaxed);
+    telemetryTotalOutputChannels.store (topology.totalOutputChannels, std::memory_order_relaxed);
+    telemetryActiveAuxiliaryOutputs.store (capabilities.activeAuxiliaryOutputBusCount,
+                                           std::memory_order_relaxed);
+    telemetrySidechainActive.store (capabilities.sidechainInputBus >= 1,
+                                    std::memory_order_relaxed);
+}
+
+void GestureBypassWrapper::allocateProcessingBuffers (double sampleRate, int samplesPerBlock)
+{
+    const auto capacity = juce::jmax (minimumRealtimeScratchSamples,
+                                      juce::jmax (samplesPerBlock,
+                                                  requestedScratchSamples.load (std::memory_order_relaxed)));
+    const auto mainOutputChannels = juce::jmax (1, getMainBusNumOutputChannels());
+
+    juce::dsp::ProcessSpec spec { sampleRate,
+                                  static_cast<juce::uint32> (juce::jmax (1, capacity)),
+                                  static_cast<juce::uint32> (mainOutputChannels) };
+    dryDelay.prepare (spec);
+    dryDelay.reset();
+
+    dryBuffer.setSize (mainOutputChannels, capacity, false, false, true);
+    childBufferChannels = child != nullptr
+        ? juce::jmax (1, juce::jmax (child->getTotalNumInputChannels(),
+                                    child->getTotalNumOutputChannels()))
+        : 1;
+    childBuffer.setSize (childBufferChannels, capacity, false, false, true);
+    scratchCapacitySamples.store (capacity, std::memory_order_release);
+    requestedScratchSamples.store (capacity, std::memory_order_relaxed);
+}
+
+void GestureBypassWrapper::requestReconfigurationForBlockSize (int samples) noexcept
+{
+    auto requested = requestedScratchSamples.load (std::memory_order_relaxed);
+    while (requested < samples
+           && ! requestedScratchSamples.compare_exchange_weak (
+               requested, samples, std::memory_order_relaxed))
+    {
+    }
+
+    reconfigurationRequested.store (true, std::memory_order_release);
+    telemetryTopologyPending.store (true, std::memory_order_relaxed);
+    telemetryLastSafetyReason.store (static_cast<int> (HostedSafetyReason::blockTooLarge),
+                                     std::memory_order_relaxed);
+}
+
+void GestureBypassWrapper::renderImmediateFallback (
+    const juce::AudioBuffer<float>& input,
+    juce::AudioBuffer<float>& output,
+    int samples) noexcept
+{
+    const auto bypassed = requestedBypass.load (std::memory_order_relaxed);
+    if (allowZeroMainInput && ! bypassed)
+        output.clear (0, samples);
+    else
+        copySameLayoutWithoutClearingSource (input, output, samples);
+}
+
+void GestureBypassWrapper::renderPreparedFallback (
+    juce::AudioBuffer<float>& output,
+    int samples) noexcept
+{
+    const auto bypassed = requestedBypass.load (std::memory_order_relaxed);
+    if (allowZeroMainInput && ! bypassed)
+        output.clear (0, samples);
+    else
+        copyAdapted (dryBuffer, output, samples);
+}
+
+bool GestureBypassWrapper::servicePendingReconfiguration (
+    const juce::AudioChannelSet& hostSidechainLayout,
+    double sampleRate,
+    int samplesPerBlock)
+{
+    const auto needsService = reconfigurationRequested.load (std::memory_order_acquire)
+        || requestedScratchSamples.load (std::memory_order_relaxed)
+            > scratchCapacitySamples.load (std::memory_order_relaxed)
+        || hostSidechainLayout != configuredHostSidechain;
+
+    if (! needsService || child == nullptr)
+        return false;
+
+    const juce::SpinLock::ScopedLockType lock (topologyLock);
+    const auto wasBridgeSidechainEnabled =
+        getBusCount (true) > 1 && getBus (true, 1) != nullptr && getBus (true, 1)->isEnabled();
+
+    if (childPrepared)
+    {
+        child->releaseResources();
+        childPrepared = false;
+    }
+
+    HostedPluginCapabilities nextCapabilities;
+    juce::String error;
+    if (! configureChildForHosting (*child,
+                                    requestedMainInput,
+                                    requestedMainOutput,
+                                    hostSidechainLayout,
+                                    allowZeroMainInput,
+                                    nextCapabilities,
+                                    error))
+    {
+        reconfigurationRequested.store (true, std::memory_order_release);
+        telemetryTopologyPending.store (true, std::memory_order_relaxed);
+        return false;
+    }
+
+    capabilities = nextCapabilities;
+    configuredHostSidechain = hostSidechainLayout;
+
+    if (getBusCount (true) > 1)
+    {
+        auto* bridgeSidechain = getBus (true, 1);
+        const auto shouldEnable = capabilities.sidechainInputBus >= 1;
+        if (bridgeSidechain != nullptr)
+        {
+            bridgeSidechain->enable (shouldEnable);
+            if (shouldEnable && ! hostSidechainLayout.isDisabled())
+                setChannelLayoutOfBus (true, 1, hostSidechainLayout);
+        }
+    }
+
+    allocateProcessingBuffers (sampleRate, samplesPerBlock);
+    child->setPlayHead (getPlayHead());
+    child->setRateAndBufferSizeDetails (sampleRate, samplesPerBlock);
+    child->prepareToPlay (sampleRate, samplesPerBlock);
+    childPrepared = true;
+
+    configuredTopology = captureChildTopology();
+    updateTopologyTelemetry (configuredTopology);
+    reconfigurationRequested.store (false, std::memory_order_release);
+    telemetryTopologyPending.store (false, std::memory_order_relaxed);
+
+    const auto isBridgeSidechainEnabled =
+        getBusCount (true) > 1 && getBus (true, 1) != nullptr && getBus (true, 1)->isEnabled();
+    return wasBridgeSidechainEnabled != isBridgeSidechainEnabled;
+}
+
+juce::AudioProcessorEditor* GestureBypassWrapper::getOrCreateEmbeddedEditor()
+{
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
     if (child == nullptr || ! child->hasEditor())
         return nullptr;
-
     if (embeddedEditor == nullptr)
         embeddedEditor.reset (child->createEditorIfNeeded());
-
     return embeddedEditor.get();
 }
 
 void GestureBypassWrapper::releaseEmbeddedEditor()
 {
-    jassert (
-        juce::MessageManager::getInstance()->isThisTheMessageThread());
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
     embeddedEditor.reset();
 }
 
-void GestureBypassWrapper::prepareToPlay (
-    double sampleRate, int samplesPerBlock)
+void GestureBypassWrapper::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    const juce::SpinLock::ScopedLockType lock (topologyLock);
+
     if (childPrepared && child != nullptr)
     {
         child->releaseResources();
         childPrepared = false;
     }
 
-    const auto mainOutputChannels =
-        juce::jmax (1, getMainBusNumOutputChannels());
-
-    juce::dsp::ProcessSpec spec {
-        sampleRate,
-        static_cast<juce::uint32> (
-            juce::jmax (1, samplesPerBlock)),
-        static_cast<juce::uint32> (mainOutputChannels)
-    };
-
-    dryDelay.prepare (spec);
-    dryDelay.reset();
-
-    scratchCapacitySamples =
-        juce::jmax (minimumRealtimeScratchSamples, samplesPerBlock);
-
-    dryBuffer.setSize (
-        mainOutputChannels, scratchCapacitySamples,
-        false, false, true);
-
-    childBufferChannels = child != nullptr
-        ? juce::jmax (
-              1,
-              juce::jmax (
-                  child->getTotalNumInputChannels(),
-                  child->getTotalNumOutputChannels()))
-        : 1;
-
-    childBuffer.setSize (
-        childBufferChannels, scratchCapacitySamples,
-        false, false, true);
-
+    allocateProcessingBuffers (sampleRate, samplesPerBlock);
     wetMix.reset (sampleRate, 0.015);
-    wetMix.setCurrentAndTargetValue (
-        requestedBypass.load (std::memory_order_relaxed)
-            ? 0.0f : 1.0f);
-
-    lastRequestedBypass =
-        requestedBypass.load (std::memory_order_relaxed);
+    wetMix.setCurrentAndTargetValue (requestedBypass.load (std::memory_order_relaxed) ? 0.0f : 1.0f);
+    safetyWet.reset (sampleRate, 0.010);
+    safetyWet.setCurrentAndTargetValue (1.0f);
+    safetyHoldRemaining.store (0, std::memory_order_relaxed);
+    telemetrySafetyActive.store (false, std::memory_order_relaxed);
+    lastRequestedBypass = requestedBypass.load (std::memory_order_relaxed);
 
     if (child != nullptr)
     {
         child->setPlayHead (getPlayHead());
-        child->setRateAndBufferSizeDetails (
-            sampleRate, samplesPerBlock);
-        child->prepareToPlay (
-            sampleRate, samplesPerBlock);
+        child->setRateAndBufferSizeDetails (sampleRate, samplesPerBlock);
+        child->prepareToPlay (sampleRate, samplesPerBlock);
         childPrepared = true;
+        configuredTopology = captureChildTopology();
+        updateTopologyTelemetry (configuredTopology);
+        telemetryTopologyPending.store (false, std::memory_order_relaxed);
     }
 }
 
 void GestureBypassWrapper::releaseResources()
 {
+    const juce::SpinLock::ScopedLockType lock (topologyLock);
     if (childPrepared && child != nullptr)
     {
         child->releaseResources();
         childPrepared = false;
     }
-
     dryDelay.reset();
 }
 
-bool GestureBypassWrapper::isBusesLayoutSupported (
-    const BusesLayout& layouts) const
+bool GestureBypassWrapper::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto in = layouts.getMainInputChannelSet();
     const auto out = layouts.getMainOutputChannelSet();
-
     if (in != out || ! isRackMainLayout (in))
         return false;
 
     if (getBusCount (true) > 1)
     {
-        const auto sidechain =
-            layouts.getChannelSet (true, 1);
-
-        if (! sidechain.isDisabled()
-            && ! isRackMainLayout (sidechain))
+        const auto sidechain = layouts.getChannelSet (true, 1);
+        if (! sidechain.isDisabled() && ! isRackMainLayout (sidechain))
             return false;
     }
 
     return true;
 }
 
-void GestureBypassWrapper::processBlock (
-    juce::AudioBuffer<float>& buffer,
-    juce::MidiBuffer& midi)
+void GestureBypassWrapper::processBlock (juce::AudioBuffer<float>& buffer,
+                                         juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
-
     if (child == nullptr)
         return;
 
+    const auto samples = buffer.getNumSamples();
+    auto hostMainInput = getBusBuffer (buffer, true, 0);
+    auto hostMainOutput = getBusBuffer (buffer, false, 0);
+
+    const juce::SpinLock::ScopedTryLockType lock (topologyLock);
+    if (! lock.isLocked())
+    {
+        telemetrySafetyActive.store (true, std::memory_order_relaxed);
+        telemetryLastSafetyReason.store (static_cast<int> (HostedSafetyReason::bridgeBusy),
+                                         std::memory_order_relaxed);
+        renderImmediateFallback (hostMainInput, hostMainOutput, samples);
+        return;
+    }
+
     child->setPlayHead (getPlayHead());
 
-    const auto shouldBypass =
-        requestedBypass.load (std::memory_order_relaxed);
-
+    const auto shouldBypass = requestedBypass.load (std::memory_order_relaxed);
     if (shouldBypass != lastRequestedBypass)
     {
         lastRequestedBypass = shouldBypass;
-        wetMix.setTargetValue (
-            shouldBypass ? 0.0f : 1.0f);
+        wetMix.setTargetValue (shouldBypass ? 0.0f : 1.0f);
     }
 
-    const auto samples = buffer.getNumSamples();
-    auto hostMainInput =
-        getBusBuffer (buffer, true, 0);
-    auto hostMainOutput =
-        getBusBuffer (buffer, false, 0);
-
-    // JUCE commonly presents the main input and output as views into the same
-    // in-place process buffer. Never clear/copy the output before preserving the
-    // input: copyAdapted() clears its destination first, so doing that on aliased
-    // input/output views erased the track before the hosted plug-in could process it.
-    if (samples > scratchCapacitySamples)
+    if (samples > scratchCapacitySamples.load (std::memory_order_acquire))
+    {
+        requestReconfigurationForBlockSize (samples);
+        telemetrySafetyActive.store (true, std::memory_order_relaxed);
+        renderImmediateFallback (hostMainInput, hostMainOutput, samples);
         return;
+    }
 
-    // Preserve the untouched upstream signal first. Effects process the existing
-    // in-place main buffer; zero-input instruments ignore it and replace the main
-    // output from their own child buffer below. This copy also feeds latency-aligned
-    // dry/bypass mixing after the wet path has finished.
-    copyAdapted (
-        hostMainInput, dryBuffer, samples);
+    const auto liveTopology = captureChildTopology();
+    if (liveTopology != configuredTopology)
+    {
+        telemetryTopologyMismatchCount.fetch_add (1, std::memory_order_relaxed);
+        telemetryTopologyPending.store (true, std::memory_order_relaxed);
+        telemetrySafetyActive.store (true, std::memory_order_relaxed);
+        telemetryLastSafetyReason.store (static_cast<int> (HostedSafetyReason::topologyChanged),
+                                         std::memory_order_relaxed);
+        reconfigurationRequested.store (true, std::memory_order_release);
+        renderImmediateFallback (hostMainInput, hostMainOutput, samples);
+        return;
+    }
 
-    const auto dryChannels =
-        dryBuffer.getNumChannels();
-    const auto latency =
-        juce::jlimit (
-            0,
-            maxCompensatedLatencySamples - 1,
-            child->getLatencySamples());
+    copyAdapted (hostMainInput, dryBuffer, samples);
+    bool inputFinite = true;
+    const auto inputPeak = finitePeak (dryBuffer, samples, inputFinite);
+    telemetryInputPeak.store (inputPeak, std::memory_order_relaxed);
 
-    dryDelay.setDelay (
-        static_cast<float> (latency));
+    const auto dryChannels = dryBuffer.getNumChannels();
+    const auto latency = juce::jlimit (0, maxCompensatedLatencySamples - 1,
+                                       child->getLatencySamples());
+    dryDelay.setDelay (static_cast<float> (latency));
+    for (int sample = 0; sample < samples; ++sample)
+        for (int channel = 0; channel < dryChannels; ++channel)
+        {
+            dryDelay.pushSample (channel, dryBuffer.getSample (channel, sample));
+            dryBuffer.setSample (channel, sample, dryDelay.popSample (channel));
+        }
+
+    auto hold = safetyHoldRemaining.load (std::memory_order_relaxed);
+    if (hold > 0)
+    {
+        safetyHoldRemaining.store (hold - 1, std::memory_order_relaxed);
+        telemetrySafetyActive.store (true, std::memory_order_relaxed);
+        renderPreparedFallback (hostMainOutput, samples);
+        return;
+    }
+
+    const auto requiredChildChannels = juce::jmax (
+        1, juce::jmax (child->getTotalNumInputChannels(), child->getTotalNumOutputChannels()));
+    if (requiredChildChannels != childBufferChannels)
+    {
+        telemetryTopologyMismatchCount.fetch_add (1, std::memory_order_relaxed);
+        telemetryTopologyPending.store (true, std::memory_order_relaxed);
+        telemetrySafetyActive.store (true, std::memory_order_relaxed);
+        telemetryLastSafetyReason.store (static_cast<int> (HostedSafetyReason::topologyChanged),
+                                         std::memory_order_relaxed);
+        reconfigurationRequested.store (true, std::memory_order_release);
+        renderPreparedFallback (hostMainOutput, samples);
+        return;
+    }
+
+    childBuffer.clear (0, samples);
+    if (capabilities.mainInputChannels > 0 && child->getBusCount (true) > 0)
+    {
+        auto childMainInput = child->getBusBuffer (childBuffer, true, 0);
+        copyAdapted (hostMainInput, childMainInput, samples);
+    }
+
+    if (capabilities.sidechainInputBus >= 1
+        && getBusCount (true) > 1
+        && getBus (true, 1) != nullptr
+        && getBus (true, 1)->isEnabled())
+    {
+        auto hostSidechain = getBusBuffer (buffer, true, 1);
+        auto childSidechain = child->getBusBuffer (childBuffer, true,
+                                                    capabilities.sidechainInputBus);
+        copyAdapted (hostSidechain, childSidechain, samples);
+    }
+
+    const auto startMs = juce::Time::getMillisecondCounterHiRes();
+    child->processBlock (childBuffer, midi);
+    const auto elapsedMicros = static_cast<float> (
+        (juce::Time::getMillisecondCounterHiRes() - startMs) * 1000.0);
+    telemetryProcessMicros.store (elapsedMicros, std::memory_order_relaxed);
+
+    auto childMainOutput = child->getBusBuffer (childBuffer, false, 0);
+    bool outputFinite = true;
+    const auto childPeak = finitePeak (childMainOutput, samples, outputFinite);
+    telemetryOutputPeak.store (childPeak, std::memory_order_relaxed);
+
+    HostedSafetyReason safetyReason = HostedSafetyReason::none;
+    if (! outputFinite)
+        safetyReason = HostedSafetyReason::nonFiniteOutput;
+    else if (childPeak > runawayPeakLinear)
+        safetyReason = HostedSafetyReason::runawayPeak;
+
+    if (safetyReason != HostedSafetyReason::none)
+    {
+        telemetrySafetyTripCount.fetch_add (1, std::memory_order_relaxed);
+        telemetryLastSafetyReason.store (static_cast<int> (safetyReason),
+                                         std::memory_order_relaxed);
+        telemetrySafetyActive.store (true, std::memory_order_relaxed);
+        safetyHoldRemaining.store (safetyHoldBlocks, std::memory_order_relaxed);
+        safetyWet.setCurrentAndTargetValue (0.0f);
+        renderPreparedFallback (hostMainOutput, samples);
+        return;
+    }
+
+    copyAdapted (childMainOutput, hostMainOutput, samples);
+    safetyWet.setTargetValue (1.0f);
 
     for (int sample = 0; sample < samples; ++sample)
-        for (int channel = 0;
-             channel < dryChannels; ++channel)
-        {
-            dryDelay.pushSample (
-                channel,
-                dryBuffer.getSample (
-                    channel, sample));
-
-            dryBuffer.setSample (
-                channel, sample,
-                dryDelay.popSample (channel));
-        }
-
-    bool processed = false;
-
-    const auto canProcessDirect =
-        capabilities.mainInputChannels
-            == hostMainInput.getNumChannels()
-        && capabilities.mainOutputChannels
-            == hostMainOutput.getNumChannels()
-        && capabilities.sidechainInputBus < 0
-        && child->getTotalNumInputChannels()
-            == capabilities.mainInputChannels
-        && child->getTotalNumOutputChannels()
-            == capabilities.mainOutputChannels;
-
-    if (canProcessDirect)
     {
-        child->processBlock (
-            hostMainOutput, midi);
-        processed = true;
-    }
-    else
-    {
-        const auto requiredChildChannels =
-            juce::jmax (
-                1,
-                juce::jmax (
-                    child->getTotalNumInputChannels(),
-                    child->getTotalNumOutputChannels()));
+        const auto userWet = wetMix.getNextValue();
+        const auto safetyGain = safetyWet.getNextValue();
+        const auto wet = userWet * safetyGain;
+        const auto dry = allowZeroMainInput ? (1.0f - userWet) : (1.0f - wet);
 
-        if (requiredChildChannels
-            == childBufferChannels)
+        for (int channel = 0; channel < hostMainOutput.getNumChannels(); ++channel)
         {
-            childBuffer.clear (0, samples);
-
-            if (capabilities.mainInputChannels > 0
-                && child->getBusCount (true) > 0)
-            {
-                auto childMainInput =
-                    child->getBusBuffer (
-                        childBuffer, true, 0);
-
-                copyAdapted (
-                    hostMainInput,
-                    childMainInput,
-                    samples);
-            }
-
-            if (capabilities.sidechainInputBus >= 1
-                && getBusCount (true) > 1)
-            {
-                auto hostSidechain =
-                    getBusBuffer (buffer, true, 1);
-
-                auto childSidechain =
-                    child->getBusBuffer (
-                        childBuffer,
-                        true,
-                        capabilities.sidechainInputBus);
-
-                copyAdapted (
-                    hostSidechain,
-                    childSidechain,
-                    samples);
-            }
-
-            child->processBlock (
-                childBuffer, midi);
-
-            auto childMainOutput =
-                child->getBusBuffer (
-                    childBuffer, false, 0);
-
-            copyAdapted (
-                childMainOutput,
-                hostMainOutput,
-                samples);
-
-            processed = true;
-        }
-    }
-
-    if (! processed)
-        return;
-
-    for (int sample = 0;
-         sample < samples; ++sample)
-    {
-        const auto wet =
-            wetMix.getNextValue();
-        const auto dry =
-            1.0f - wet;
-
-        for (int channel = 0;
-             channel < hostMainOutput.getNumChannels();
-             ++channel)
-        {
-            const auto dryChannel =
-                juce::jmin (
-                    channel,
-                    dryChannels - 1);
-
+            const auto dryChannel = juce::jmin (channel, dryChannels - 1);
             hostMainOutput.setSample (
                 channel, sample,
-                hostMainOutput.getSample (
-                    channel, sample) * wet
-                + dryBuffer.getSample (
-                    dryChannel, sample) * dry);
+                hostMainOutput.getSample (channel, sample) * wet
+                    + dryBuffer.getSample (dryChannel, sample) * dry);
         }
     }
+
+    telemetrySafetyActive.store (safetyWet.isSmoothing(), std::memory_order_relaxed);
+    if (! telemetrySafetyActive.load (std::memory_order_relaxed))
+        telemetryLastSafetyReason.store (static_cast<int> (HostedSafetyReason::none),
+                                         std::memory_order_relaxed);
 }
 
 double GestureBypassWrapper::getTailLengthSeconds() const
 {
-    return child != nullptr
-        ? child->getTailLengthSeconds()
-        : 0.0;
+    return child != nullptr ? child->getTailLengthSeconds() : 0.0;
 }
 
 bool GestureBypassWrapper::acceptsMidi() const
 {
-    return child != nullptr
-        && child->acceptsMidi();
+    return child != nullptr && child->acceptsMidi();
 }
 
 bool GestureBypassWrapper::producesMidi() const
 {
-    return child != nullptr
-        && child->producesMidi();
+    return child != nullptr && child->producesMidi();
 }
 }
