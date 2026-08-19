@@ -1,0 +1,89 @@
+name: Windows VST3 Fast Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Source/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/windows-vst3-fast-package.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-vst3-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-package:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout JUCE 8.0.15
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.15
+          path: JUCE
+          fetch-depth: 1
+
+      - name: Configure JUCE project
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF
+
+      - name: Build GestureRack VST3 and isolated scanner
+        run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+
+      - name: Stage VST3-only test package
+        shell: pwsh
+        run: |
+          $package = "release/GestureRack-Windows-VST3"
+          $vst3Source = "build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3"
+          $vst3Binary = "$package/Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3"
+          $scannerBinary = "$package/Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe"
+          New-Item -ItemType Directory -Force "release" | Out-Null
+          Copy-Item -Recurse -Force $vst3Source "$package/Gesture Rack.vst3"
+          @(
+            "Gesture Rack Windows VST3 Test Package",
+            "Commit: $env:GITHUB_SHA",
+            "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
+            "Hosted rack/meta effects: capability-negotiated buses",
+            "Sidechain: optional outer bus with hosted secondary-input bridge",
+            "MIDI: DAW input broadcast to MIDI-capable hosted effects"
+          ) | Set-Content -Encoding UTF8 "$package/VERSION.txt"
+          if (-not (Test-Path $vst3Binary)) { throw "Gesture Rack VST3 binary missing" }
+          if (-not (Test-Path $scannerBinary)) { throw "GestureRackScanner missing from VST3 bundle" }
+          $vst3Hash = (Get-FileHash $vst3Binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          $scannerHash = (Get-FileHash $scannerBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$vst3Hash  Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3",
+            "$scannerHash  Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe"
+          ) | Set-Content -Encoding ASCII "$package/SHA256SUMS.txt"
+          Compress-Archive -Path "$package/*" -DestinationPath "release/GestureRack-Windows-VST3.zip" -Force
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GestureRack-Windows-VST3
+          path: release/GestureRack-Windows-VST3.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish commit test release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "test-$env:GITHUB_SHA"
+          $title = "GestureRack Test $($env:GITHUB_SHA.Substring(0, 8))"
+          gh release create $tag "release/GestureRack-Windows-VST3.zip" `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --target "$env:GITHUB_SHA" `
+            --title $title `
+            --notes "Automated Windows VST3-only test package for commit $env:GITHUB_SHA." `
+            --prerelease
