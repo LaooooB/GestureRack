@@ -7,6 +7,12 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+env:
+  GESTURERACK_RELEASE_VERSION: '0.6.0'
+
 concurrency:
   group: windows-vst3-${{ github.ref }}
   cancel-in-progress: true
@@ -69,55 +75,76 @@ jobs:
       - name: Build GestureRack VST3 and isolated scanner
         run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
 
-      - name: Stage Windows package
+      - name: Stage official Windows release
         shell: pwsh
         run: |
-          $package = "release/GestureRack-Windows-Package"
+          $version = $env:GESTURERACK_RELEASE_VERSION
+          $packageName = "GestureRack-v$version-Windows-x64"
+          $package = "release/$packageName"
+          $zip = "release/$packageName.zip"
           $vst3Source = "build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3"
           $vst3Binary = "$package/VST3/Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3"
           $scannerBinary = "$package/VST3/Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe"
+          $visionBinary = "$package/GestureVisionEngine.exe"
+          $collectorBinary = "$package/Tools/GestureDataCollector.exe"
+
           New-Item -ItemType Directory -Force "$package/VST3" | Out-Null
+          New-Item -ItemType Directory -Force "$package/Tools" | Out-Null
           Copy-Item -Recurse -Force $vst3Source "$package/VST3/Gesture Rack.vst3"
-          Copy-Item -Force "VisionEngine/dist/GestureVisionEngine.exe" "$package/GestureVisionEngine.exe"
-          Copy-Item -Force "VisionEngine/dist/GestureDataCollector.exe" "$package/GestureDataCollector.exe"
+          Copy-Item -Force "VisionEngine/dist/GestureVisionEngine.exe" $visionBinary
+          Copy-Item -Force "VisionEngine/dist/GestureDataCollector.exe" $collectorBinary
           Copy-Item -Force "packaging/windows/使用说明-快速开始.txt" "$package/使用说明-快速开始.txt"
+
           @(
-            "Gesture Rack Windows Package",
+            "Gesture Rack v$version Windows x64",
+            "Package type: Production",
+            "Version: $version",
             "Commit: $env:GITHUB_SHA",
             "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')",
+            "Python required: no",
+            "Vision runtime: GestureVisionEngine.exe bundled",
+            "Vision model: MediaPipe gesture_recognizer.task embedded in frozen runtime",
             "Hosted plugin UI: embedded in Gesture Rack",
+            "Hosted DSP: raw bus-aware AudioProcessorGraph",
+            "Sidechain/AUX: host-aware routing enabled",
+            "Processing precision: float and double supported",
             "VST3 discovery: isolated GestureRackScanner helper with crash/hang recovery",
-            "Vision shadow classifier: disabled by default",
-            "GestureDataCollector.exe: optional guided full-class recognition dataset capture"
+            "GestureDataCollector.exe: optional development/recognition tuning utility under Tools"
           ) | Set-Content -Encoding UTF8 "$package/VERSION.txt"
-          if (-not (Test-Path "$package/GestureVisionEngine.exe")) { throw "VisionEngine EXE missing" }
-          if (-not (Test-Path "$package/GestureDataCollector.exe")) { throw "GestureDataCollector EXE missing" }
+
+          if (-not (Test-Path $visionBinary)) { throw "GestureVisionEngine EXE missing" }
+          if (-not (Test-Path $collectorBinary)) { throw "GestureDataCollector EXE missing" }
           if (-not (Test-Path $vst3Source)) { throw "Gesture Rack VST3 source bundle missing" }
           if (-not (Test-Path $vst3Binary)) { throw "Gesture Rack VST3 binary missing after staging" }
           if (-not (Test-Path $scannerBinary)) { throw "Isolated GestureRackScanner missing from VST3 bundle" }
-          $visionHash = (Get-FileHash "$package/GestureVisionEngine.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
-          $collectorHash = (Get-FileHash "$package/GestureDataCollector.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $visionHash = (Get-FileHash $visionBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+          $collectorHash = (Get-FileHash $collectorBinary -Algorithm SHA256).Hash.ToLowerInvariant()
           $vst3Hash = (Get-FileHash $vst3Binary -Algorithm SHA256).Hash.ToLowerInvariant()
           $scannerHash = (Get-FileHash $scannerBinary -Algorithm SHA256).Hash.ToLowerInvariant()
           @(
             "$visionHash  GestureVisionEngine.exe",
-            "$collectorHash  GestureDataCollector.exe",
+            "$collectorHash  Tools/GestureDataCollector.exe",
             "$vst3Hash  VST3/Gesture Rack.vst3/Contents/x86_64-win/Gesture Rack.vst3",
             "$scannerHash  VST3/Gesture Rack.vst3/Contents/x86_64-win/GestureRackScanner.exe"
           ) | Set-Content -Encoding ASCII "$package/SHA256SUMS.txt"
 
-      - name: Upload complete Windows package
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -Force
+          if (-not (Test-Path $zip)) { throw "Official release ZIP missing" }
+
+      - name: Upload official Windows release
         uses: actions/upload-artifact@v4
         with:
-          name: GestureRack-Windows-Package
-          path: release/GestureRack-Windows-Package/
+          name: GestureRack-v${{ env.GESTURERACK_RELEASE_VERSION }}-Windows-x64
+          path: release/GestureRack-v${{ env.GESTURERACK_RELEASE_VERSION }}-Windows-x64.zip
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload Gesture Rack VST3 only
         uses: actions/upload-artifact@v4
         with:
-          name: GestureRack-Windows-VST3
+          name: GestureRack-v${{ env.GESTURERACK_RELEASE_VERSION }}-Windows-VST3-only
           path: build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3/
           if-no-files-found: error
           retention-days: 30
