@@ -1,3 +1,4 @@
+# ci-artifacts branch is pre-created for direct retrieval.
 name: Windows VST3 Fast Package
 
 on:
