@@ -74,16 +74,33 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish commit test release
+      - name: Publish direct-download package branch
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "test-$env:GITHUB_SHA"
-          $title = "GestureRack Test $($env:GITHUB_SHA.Substring(0, 8))"
-          gh release create $tag "release/GestureRack-Windows-VST3.zip" `
-            --repo "$env:GITHUB_REPOSITORY" `
-            --target "$env:GITHUB_SHA" `
-            --title $title `
-            --notes "Automated Windows VST3-only test package for commit $env:GITHUB_SHA." `
-            --prerelease
+          $artifact = (Resolve-Path "release/GestureRack-Windows-VST3.zip").Path
+          $publishDir = Join-Path $env:RUNNER_TEMP "gesturerack-ci-artifacts"
+          if (Test-Path $publishDir) { Remove-Item -Recurse -Force $publishDir }
+
+          git fetch origin ci-artifacts 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            git worktree add -B ci-artifacts $publishDir origin/ci-artifacts
+          } else {
+            git worktree add --detach $publishDir
+            Push-Location $publishDir
+            git checkout --orphan ci-artifacts
+            git rm -rf . 2>$null
+            Pop-Location
+          }
+
+          Push-Location $publishDir
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          Copy-Item $artifact "GestureRack-Windows-VST3.zip" -Force
+          @(
+            "commit=$env:GITHUB_SHA",
+            "built=$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')"
+          ) | Set-Content -Encoding ASCII "LATEST.txt"
+          git add GestureRack-Windows-VST3.zip LATEST.txt
+          git commit -m "Publish Windows VST3 $env:GITHUB_SHA"
+          git push origin ci-artifacts --force
+          Pop-Location
