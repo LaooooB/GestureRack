@@ -1,0 +1,51 @@
+name: Verify Dynamic Chain v0.4.0
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.ci/refactor-v040-probe*'
+      - '.github/workflows/verify-dynamic-chain-v040.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout JUCE 8.0.15
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.15
+          path: JUCE
+          fetch-depth: 1
+
+      - name: Assemble refactor script
+        shell: cmd
+        run: copy /b tools\refactor_dynamic_part01.txt+tools\refactor_dynamic_part02.txt+tools\refactor_dynamic_part03.txt+tools\refactor_dynamic_part04.txt+tools\refactor_dynamic_part05.txt+tools\refactor_dynamic_part06.txt+tools\refactor_dynamic_part07.txt+tools\refactor_dynamic_part08.txt tools\refactor_dynamic.py
+
+      - name: Apply refactor
+        shell: pwsh
+        run: python tools/refactor_dynamic.py
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF
+
+      - name: Build VST3 and scanner
+        shell: pwsh
+        run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+
+      - name: Verify architecture
+        shell: pwsh
+        run: |
+          if (-not (Select-String -Quiet -Path CMakeLists.txt -Pattern 'VERSION 0.4.0')) { throw 'Version missing' }
+          if (Select-String -Quiet -Path Source\RackGraphManager.h -Pattern 'slotCount = 9') { throw 'Fixed slot count remains' }
+          if (-not (Select-String -Quiet -Path Source\PluginProcessor.h -Pattern 'gestureControllableSlotCount = 10')) { throw 'Gesture cap missing' }
+          if (Select-String -Quiet -Path Source\PluginCategory.cpp -Pattern '! plugin.isInstrument') { throw 'Instrument filter remains' }
