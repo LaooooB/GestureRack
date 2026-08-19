@@ -995,9 +995,17 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     const auto snapshot = processor.getDualHandVisionSnapshot();
     const auto connected = processor.isVisionConnected();
-    auto statusArea = topBarBounds;
-    statusArea.removeFromRight (settingsButton.getWidth() + menuButton.getWidth() + 16);
-    statusArea = statusArea.removeFromRight (150);
+    auto topRight = topBarBounds;
+    topRight.removeFromRight (settingsButton.getWidth() + menuButton.getWidth() + 16);
+
+    auto versionArea = topRight.removeFromRight (88);
+    g.setColour (ui::textMuted.withAlpha (0.82f));
+    g.setFont (ui::metaFont());
+    g.drawText ("v" + juce::String (JucePlugin_VersionString), versionArea,
+                juce::Justification::centredRight);
+
+    topRight.removeFromRight (8);
+    auto statusArea = topRight.removeFromRight (150);
     auto cameraIcon = statusArea.removeFromLeft (24).withSizeKeepingCentre (18, 18);
     ui::drawIcon (g, ui::Icon::camera, cameraIcon.toFloat(), ui::textMuted, 1.45f);
     auto dotArea = statusArea.removeFromLeft (18).withSizeKeepingCentre (8, 8).toFloat();
@@ -1017,10 +1025,16 @@ void GestureRackAudioProcessorEditor::paint (juce::Graphics& g)
 
     if (const auto error = processor.getSlotLastError (processor.getSelectedSlot()); error.isNotEmpty())
     {
-        auto errorArea = pluginPanelBounds.reduced (14).removeFromBottom (18);
-        g.setColour (ui::accentDim);
-        g.setFont (ui::metaFont());
-        g.drawFittedText (error, errorArea, juce::Justification::centredLeft, 1);
+        auto errorArea = pluginPanelBounds.reduced (28);
+        errorArea = errorArea.withSizeKeepingCentre (juce::jmin (760, errorArea.getWidth()), 54);
+        const auto loading = error.startsWithIgnoreCase ("LOADING ");
+        g.setColour (loading ? ui::control.withAlpha (0.94f) : ui::panelLow.withAlpha (0.96f));
+        g.fillRoundedRectangle (errorArea.toFloat(), 6.0f);
+        g.setColour (loading ? ui::border : ui::accentDim);
+        g.drawRoundedRectangle (errorArea.toFloat().reduced (0.5f), 6.0f, 0.9f);
+        g.setColour (loading ? ui::textMuted : ui::accent);
+        g.setFont (ui::controlFont());
+        g.drawFittedText (error, errorArea.reduced (12, 5), juce::Justification::centred, 2);
     }
 
     auto cameraHeader = cameraPanelBounds.reduced (14).removeFromTop (24);

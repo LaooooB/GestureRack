@@ -13,12 +13,17 @@ void GestureRackAudioProcessor::loadPluginDescription (int slotIndex,
         slot.setLastError ("Gesture Rack cannot host itself.");
         return;
     }
-    if (description.isInstrument || description.numInputChannels <= 0)
+    // Scanner channel counts are discovery metadata only. Complex VST3 rack/meta
+    // effects can report zero or incomplete I/O until a real instance is created and
+    // its buses are negotiated. Only the explicit instrument policy is enforced here;
+    // configureChildForHosting() is the runtime compatibility authority.
+    if (description.isInstrument)
     {
         slot.setLastError ("This rack hosts audio effects, not instruments.");
         return;
     }
 
+    slot.setLastError ("LOADING " + description.name + "...");
     parameterLearnManager.cancelIfSlot (slotIndex);
     mappingEngine.releaseAllActiveGestures();
     if (slotIndex == getSelectedSlot())
