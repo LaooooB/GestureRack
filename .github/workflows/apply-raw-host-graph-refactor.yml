@@ -1,0 +1,60 @@
+name: Apply Raw Hosted Graph Refactor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-raw-host-graph-refactor.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refactor-and-verify:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Checkout JUCE 8.0.15
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.15
+          path: JUCE
+          fetch-depth: 1
+
+      - name: Apply host architecture refactor
+        run: python tools/apply_raw_host_graph_refactor.py
+
+      - name: Configure GestureRack
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DGESTURERACK_FETCH_JUCE=OFF
+
+      - name: Build VST3 and isolated scanner
+        run: cmake --build build --config Release --target GestureRack_VST3 --parallel 2
+
+      - name: Verify host architecture invariants
+        shell: pwsh
+        run: |
+          if (Test-Path "Source/GestureBypassWrapper.cpp") { throw "Legacy hosted wrapper still exists" }
+          if (Test-Path "Source/GestureBypassWrapper.h") { throw "Legacy hosted wrapper still exists" }
+          if (Select-String -Path Source/*.cpp,Source/*.h -Pattern "disableNonMainBuses" -Quiet) { throw "Host still disables non-main buses" }
+          if (-not (Select-String -Path Source/RackGraphManager.cpp -Pattern "AudioPluginInstance" -Quiet)) { throw "Raw plugin nodes not installed" }
+          if (-not (Select-String -Path Source/PluginProcessor.cpp -Pattern 'Aux 8' -Quiet)) { throw "Rack aux bank missing" }
+          if (-not (Test-Path "build/GestureRack_artefacts/Release/VST3/Gesture Rack.vst3")) { throw "VST3 output missing" }
+
+      - name: Commit verified refactor to main
+        shell: bash
+        run: |
+          rm -f tools/apply_raw_host_graph_refactor.py
+          rm -f .github/workflows/apply-raw-host-graph-refactor.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Replace hosted wrapper with raw bus-aware plugin graph"
+          git push origin HEAD:main
