@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(GestureRack VERSION 0.4.0 LANGUAGES C CXX)
+project(GestureRack VERSION 0.4.1 LANGUAGES C CXX)
 
 set(GESTURERACK_JUCE_VERSION "8.0.15" CACHE STRING "JUCE version fetched when no local/system JUCE is available")
 option(GESTURERACK_FETCH_JUCE "Download JUCE automatically when JUCE/ and a system JUCE package are unavailable" ON)

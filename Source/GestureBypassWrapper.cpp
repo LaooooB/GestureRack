@@ -396,12 +396,17 @@ void GestureBypassWrapper::processBlock (
     auto hostMainOutput =
         getBusBuffer (buffer, false, 0);
 
-    copyAdapted (
-        hostMainInput, hostMainOutput, samples);
-
+    // JUCE commonly presents the main input and output as views into the same
+    // in-place process buffer. Never clear/copy the output before preserving the
+    // input: copyAdapted() clears its destination first, so doing that on aliased
+    // input/output views erased the track before the hosted plug-in could process it.
     if (samples > scratchCapacitySamples)
         return;
 
+    // Preserve the untouched upstream signal first. Effects process the existing
+    // in-place main buffer; zero-input instruments ignore it and replace the main
+    // output from their own child buffer below. This copy also feeds latency-aligned
+    // dry/bypass mixing after the wet path has finished.
     copyAdapted (
         hostMainInput, dryBuffer, samples);
 
