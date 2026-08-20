@@ -268,6 +268,12 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
         return false;
     }
 
+    // Empty slots receive the built-in Palm/Fist defaults before a child plug-in
+    // exists. They must always remain SELECTED and must never inherit a stale UI
+    // hover from an earlier GLOBAL drop.
+    const auto requestedScope = slots[static_cast<size_t> (slotIndex)]->hasPlugin()
+        ? nextSlotActionScope : BindingScope::selected;
+
     for (const auto& existing : getMappings (slotIndex))
     {
         if (existing.sourceGesture != gesture || existing.targetType != MappingTargetType::slotAction)
@@ -275,7 +281,7 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
 
         if (existing.mode == mode)
         {
-            if (existing.scope == nextSlotActionScope)
+            if (existing.scope == requestedScope)
             {
                 error = "This gesture is already mapped to that slot action in "
                       + bindingScopeToString (existing.scope) + ".";
@@ -283,13 +289,14 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
             }
 
             auto replacement = existing;
-            replacement.scope = nextSlotActionScope;
+            replacement.scope = requestedScope;
             replacement.slotIndex = slotIndex;
             if (! slots[static_cast<size_t> (slotIndex)]->updateMapping (replacement))
             {
                 error = "The slot action scope could not be changed.";
                 return false;
             }
+            nextSlotActionScope = BindingScope::selected;
             return true;
         }
 
@@ -302,8 +309,9 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
     binding.sourceGesture = gesture;
     binding.targetType = MappingTargetType::slotAction;
     binding.mode = mode;
-    binding.scope = nextSlotActionScope;
+    binding.scope = requestedScope;
     slots[static_cast<size_t> (slotIndex)]->addMapping (binding);
+    nextSlotActionScope = BindingScope::selected;
     return true;
 }
 

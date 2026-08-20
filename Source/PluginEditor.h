@@ -155,10 +155,15 @@ private:
         {
             setOpaque (false);
             owner.addAndMakeVisible (*this);
+            owner.addMouseListener (this, true);
             startTimerHz (60);
         }
 
-        ~SlotActionScopeOverlay() override { stopTimer(); }
+        ~SlotActionScopeOverlay() override
+        {
+            owner.removeMouseListener (this);
+            stopTimer();
+        }
 
         bool hitTest (int x, int y) override
         {
@@ -175,7 +180,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             updateGeometry();
-            const auto point = e.getPosition();
+            const auto point = e.getEventRelativeTo (&owner).getPosition();
 
             if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
             {
@@ -190,6 +195,13 @@ private:
                 togglePrimaryScope (gr::MappingMode::triggerSetActive);
             else if (bypassScopeRect.contains (point))
                 togglePrimaryScope (gr::MappingMode::triggerSetBypassed);
+        }
+
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isLeftButtonDown()) return;
+            updateGeometry();
+            updateDropScopeFromPoint (e.getEventRelativeTo (&owner).getPosition());
         }
 
         void paint (juce::Graphics& g) override
@@ -265,6 +277,18 @@ private:
             if (const auto binding = primaryBinding (mode); binding.has_value())
                 owner.processor.removeGestureMapping (binding->id);
             repaint();
+        }
+
+        void updateDropScopeFromPoint (juce::Point<int> point)
+        {
+            if (activeTargetRect.contains (point))
+                owner.processor.setNextSlotActionBindingScope (
+                    point.x < activeTargetRect.getCentreX()
+                        ? gr::BindingScope::selected : gr::BindingScope::global);
+            else if (bypassTargetRect.contains (point))
+                owner.processor.setNextSlotActionBindingScope (
+                    point.x < bypassTargetRect.getCentreX()
+                        ? gr::BindingScope::selected : gr::BindingScope::global);
         }
 
         void drawSplitTarget (juce::Graphics& g,
@@ -416,16 +440,7 @@ private:
             const auto mouse = getMouseXYRelative();
             const auto leftDown = juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown();
             if (leftDown)
-            {
-                if (activeTargetRect.contains (mouse))
-                    owner.processor.setNextSlotActionBindingScope (
-                        mouse.x < activeTargetRect.getCentreX()
-                            ? gr::BindingScope::selected : gr::BindingScope::global);
-                else if (bypassTargetRect.contains (mouse))
-                    owner.processor.setNextSlotActionBindingScope (
-                        mouse.x < bypassTargetRect.getCentreX()
-                            ? gr::BindingScope::selected : gr::BindingScope::global);
-            }
+                updateDropScopeFromPoint (mouse);
             toFront (false);
             repaint();
         }
