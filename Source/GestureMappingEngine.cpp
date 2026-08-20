@@ -131,6 +131,19 @@ float GestureMappingEngine::normaliseHorizontalPalmX (float palmX) noexcept
     return juce::jlimit (0.0f, 1.0f, (palmX - left) / (right - left));
 }
 
+bool GestureMappingEngine::bindingRespondsInContext (const GestureBinding& binding,
+                                                     int bindingSlotIndex,
+                                                     int selectedSlotIndex) const noexcept
+{
+    // Slot actions intentionally remain local to the selected plug-in. Scope is
+    // a parameter-routing concept; a GLOBAL Palm must not power/bypass every FX.
+    if (binding.targetType == MappingTargetType::slotAction)
+        return bindingSlotIndex == selectedSlotIndex;
+
+    return binding.scope == BindingScope::global
+        || bindingSlotIndex == selectedSlotIndex;
+}
+
 void GestureMappingEngine::removeMappingsOwnedByGesture (int slotIndex,
                                                           ControlGesture gesture,
                                                           const juce::Uuid* exceptId)
@@ -185,15 +198,17 @@ bool GestureMappingEngine::addParameterBinding (int slotIndex,
     binding.sourceGesture = gesture;
     binding.targetType = MappingTargetType::childParameter;
     binding.mode = defaultModeForParameter (descriptor);
+    binding.scope = nextBindingScope;
     binding.pluginIdentifier = getPluginIdentifier (slotIndex);
     binding.parameterStableId = descriptor.stableId;
     binding.parameterIndexFallback = descriptor.index;
     binding.parameterName = descriptor.name;
 
-    // A parameter has one gesture owner, while a gesture can still fan out to
-    // multiple different parameters. Dropping a new gesture on an occupied
-    // parameter replaces only the source gesture and deliberately preserves the
-    // player's axis, curve, range, sensitivity, smoothing and inversion setup.
+    // A parameter still has one gesture owner, while one gesture may fan out to
+    // any number of different parameters. Scope belongs to the binding. Rebinding
+    // the exact same Gesture + Plugin + Parameter in the other scope MOVES that
+    // binding instead of creating a second writer, enforcing the single-scope
+    // invariant requested by the UI model.
     for (const auto& existing : getMappings (slotIndex))
     {
         if (! sameParameterTarget (existing, binding))
@@ -201,12 +216,34 @@ bool GestureMappingEngine::addParameterBinding (int slotIndex,
 
         if (existing.sourceGesture == gesture)
         {
-            error = "This gesture is already mapped to that parameter.";
-            return false;
+            if (existing.scope == binding.scope)
+            {
+                error = "This gesture is already mapped to that parameter in "
+                      + bindingScopeToString (binding.scope) + ".";
+                return false;
+            }
+
+            auto replacement = existing;
+            replacement.scope = binding.scope;
+            replacement.slotIndex = slotIndex;
+            replacement.pluginIdentifier = binding.pluginIdentifier;
+            replacement.parameterStableId = binding.parameterStableId;
+            replacement.parameterIndexFallback = binding.parameterIndexFallback;
+            replacement.parameterName = binding.parameterName;
+
+            endHostGesture (slotIndex, existing);
+            runtimeStates.erase (existing.id.toString().toStdString());
+            if (! slots[static_cast<size_t> (slotIndex)]->updateMapping (replacement))
+            {
+                error = "The parameter mapping scope could not be changed.";
+                return false;
+            }
+            return true;
         }
 
         auto replacement = existing;
         replacement.sourceGesture = gesture;
+        replacement.scope = binding.scope;
         replacement.slotIndex = slotIndex;
         replacement.pluginIdentifier = binding.pluginIdentifier;
         replacement.parameterStableId = binding.parameterStableId;
@@ -268,6 +305,7 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
     binding.sourceGesture = gesture;
     binding.targetType = MappingTargetType::slotAction;
     binding.mode = mode;
+    binding.scope = BindingScope::selected;
     slots[static_cast<size_t> (slotIndex)]->addMapping (binding);
     return true;
 }
@@ -289,6 +327,13 @@ bool GestureMappingEngine::updateBinding (const GestureBinding& binding, juce::S
     updated.curve = juce::jlimit (0.0f, 1.0f, updated.curve);
     updated.sensitivity = juce::jlimit (0.25f, 8.0f, updated.sensitivity);
 
+    const auto scope = static_cast<int> (updated.scope);
+    if (scope < static_cast<int> (BindingScope::selected)
+        || scope > static_cast<int> (BindingScope::global))
+        updated.scope = BindingScope::selected;
+    if (updated.targetType == MappingTargetType::slotAction)
+        updated.scope = BindingScope::selected;
+
     const auto axis = static_cast<int> (updated.sourceAxis);
     if (axis < static_cast<int> (MappingAxis::vertical)
         || axis > static_cast<int> (MappingAxis::horizontal))
@@ -297,6 +342,21 @@ bool GestureMappingEngine::updateBinding (const GestureBinding& binding, juce::S
     if (curveType < static_cast<int> (MappingCurveType::linear)
         || curveType > static_cast<int> (MappingCurveType::logarithmic))
         updated.curveType = MappingCurveType::linear;
+
+    if (updated.targetType == MappingTargetType::childParameter)
+    {
+        for (const auto& existing : getMappings (updated.slotIndex))
+        {
+            if (existing.id == updated.id)
+                continue;
+            if (existing.sourceGesture == updated.sourceGesture
+                && sameParameterTarget (existing, updated))
+            {
+                error = "The same gesture and parameter can only exist in one scope.";
+                return false;
+            }
+        }
+    }
 
     endHostGesture (updated.slotIndex, updated);
     if (! slots[static_cast<size_t> (updated.slotIndex)]->updateMapping (updated))
@@ -398,10 +458,20 @@ void GestureMappingEngine::triggerGestureEntered (int slotIndex, ControlGesture 
     if (! isValidSlotIndex (slotIndex) || gesture == ControlGesture::unknown)
         return;
 
-    auto& slot = *slots[static_cast<size_t> (slotIndex)];
+    for (int bindingSlotIndex = 0; bindingSlotIndex < static_cast<int> (slots.size()); ++bindingSlotIndex)
+        if (isValidSlotIndex (bindingSlotIndex))
+            triggerGestureEnteredForSlot (bindingSlotIndex, slotIndex, gesture);
+}
+
+void GestureMappingEngine::triggerGestureEnteredForSlot (int bindingSlotIndex,
+                                                          int selectedSlotIndex,
+                                                          ControlGesture gesture)
+{
+    auto& slot = *slots[static_cast<size_t> (bindingSlotIndex)];
     for (const auto& binding : slot.getMappings())
     {
-        if (! binding.enabled || binding.sourceGesture != gesture)
+        if (! binding.enabled || binding.sourceGesture != gesture
+            || ! bindingRespondsInContext (binding, bindingSlotIndex, selectedSlotIndex))
             continue;
         if (binding.targetType == MappingTargetType::slotAction)
         {
@@ -412,7 +482,7 @@ void GestureMappingEngine::triggerGestureEntered (int slotIndex, ControlGesture 
             continue;
         }
 
-        auto* parameter = resolveParameter (slotIndex, binding);
+        auto* parameter = resolveParameter (bindingSlotIndex, binding);
         if (parameter == nullptr)
             continue;
         auto& state = runtimeStates[binding.id.toString().toStdString()];
@@ -426,7 +496,7 @@ void GestureMappingEngine::triggerGestureEntered (int slotIndex, ControlGesture 
         {
             case MappingMode::toggleParameter:
                 writeParameter (*parameter, parameter->getValue() >= 0.5f ? binding.minValue : binding.maxValue);
-                endHostGesture (slotIndex, binding);
+                endHostGesture (bindingSlotIndex, binding);
                 break;
             case MappingMode::cycleParameter:
             {
@@ -435,28 +505,28 @@ void GestureMappingEngine::triggerGestureEntered (int slotIndex, ControlGesture 
                 if (next > binding.maxValue + 0.0001f)
                     next = binding.minValue;
                 writeParameter (*parameter, next);
-                endHostGesture (slotIndex, binding);
+                endHostGesture (bindingSlotIndex, binding);
                 break;
             }
             case MappingMode::stepUpParameter:
                 writeParameter (*parameter, juce::jmin (binding.maxValue, parameter->getValue() + discreteStepDelta (*parameter)));
-                endHostGesture (slotIndex, binding);
+                endHostGesture (bindingSlotIndex, binding);
                 break;
             case MappingMode::stepDownParameter:
                 writeParameter (*parameter, juce::jmax (binding.minValue, parameter->getValue() - discreteStepDelta (*parameter)));
-                endHostGesture (slotIndex, binding);
+                endHostGesture (bindingSlotIndex, binding);
                 break;
             case MappingMode::momentaryParameter:
                 writeParameter (*parameter, binding.maxValue);
                 break;
             case MappingMode::triggerParameter:
                 writeParameter (*parameter, binding.maxValue);
-                endHostGesture (slotIndex, binding);
+                endHostGesture (bindingSlotIndex, binding);
                 break;
             case MappingMode::absoluteHeight:
                 break;
             default:
-                endHostGesture (slotIndex, binding);
+                endHostGesture (bindingSlotIndex, binding);
                 break;
         }
     }
@@ -477,14 +547,26 @@ void GestureMappingEngine::triggerGestureExited (int slotIndex, ControlGesture g
 {
     if (! isValidSlotIndex (slotIndex) || gesture == ControlGesture::unknown)
         return;
-    for (const auto& binding : getMappings (slotIndex))
+
+    for (int bindingSlotIndex = 0; bindingSlotIndex < static_cast<int> (slots.size()); ++bindingSlotIndex)
+        if (isValidSlotIndex (bindingSlotIndex))
+            triggerGestureExitedForSlot (bindingSlotIndex, slotIndex, gesture);
+}
+
+void GestureMappingEngine::triggerGestureExitedForSlot (int bindingSlotIndex,
+                                                         int selectedSlotIndex,
+                                                         ControlGesture gesture)
+{
+    for (const auto& binding : getMappings (bindingSlotIndex))
     {
-        if (! binding.enabled || binding.sourceGesture != gesture || binding.targetType != MappingTargetType::childParameter)
+        if (! binding.enabled || binding.sourceGesture != gesture
+            || binding.targetType != MappingTargetType::childParameter
+            || ! bindingRespondsInContext (binding, bindingSlotIndex, selectedSlotIndex))
             continue;
         if (binding.mode == MappingMode::momentaryParameter)
-            if (auto* parameter = resolveParameter (slotIndex, binding))
+            if (auto* parameter = resolveParameter (bindingSlotIndex, binding))
                 writeParameter (*parameter, binding.minValue);
-        endHostGesture (slotIndex, binding);
+        endHostGesture (bindingSlotIndex, binding);
     }
 }
 
@@ -509,13 +591,27 @@ void GestureMappingEngine::processContinuous (int slotIndex,
     const auto sourceY = juce::jlimit (0.0f, 1.0f, normalizedY);
     const auto dt = juce::jlimit (0.0001f, 1.0f, deltaSeconds);
 
-    for (const auto& binding : slots[static_cast<size_t> (slotIndex)]->getMappings())
+    for (int bindingSlotIndex = 0; bindingSlotIndex < static_cast<int> (slots.size()); ++bindingSlotIndex)
+        if (isValidSlotIndex (bindingSlotIndex))
+            processContinuousForSlot (bindingSlotIndex, slotIndex, gesture,
+                                      sourceX, sourceY, dt);
+}
+
+void GestureMappingEngine::processContinuousForSlot (int bindingSlotIndex,
+                                                      int selectedSlotIndex,
+                                                      ControlGesture gesture,
+                                                      float sourceX,
+                                                      float sourceY,
+                                                      float deltaSeconds)
+{
+    for (const auto& binding : slots[static_cast<size_t> (bindingSlotIndex)]->getMappings())
     {
         if (! binding.enabled || binding.sourceGesture != gesture
             || binding.targetType != MappingTargetType::childParameter
-            || binding.mode != MappingMode::absoluteHeight)
+            || binding.mode != MappingMode::absoluteHeight
+            || ! bindingRespondsInContext (binding, bindingSlotIndex, selectedSlotIndex))
             continue;
-        auto* parameter = resolveParameter (slotIndex, binding);
+        auto* parameter = resolveParameter (bindingSlotIndex, binding);
         if (parameter == nullptr)
             continue;
 
@@ -552,7 +648,7 @@ void GestureMappingEngine::processContinuous (int slotIndex,
         else
         {
             const auto tau = juce::jmax (0.001f, binding.smoothingMs * 0.001f);
-            const auto alpha = 1.0f - std::exp (-dt / tau);
+            const auto alpha = 1.0f - std::exp (-deltaSeconds / tau);
             state.smoothedOutput += alpha * (target - state.smoothedOutput);
         }
         writeParameter (*parameter, state.smoothedOutput);

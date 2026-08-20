@@ -19,19 +19,12 @@ void RightGestureRuntime::reset() noexcept
 
 void RightGestureRuntime::disarmForSlotChange() noexcept
 {
-    if (acceptedGesture == ControlGesture::unknown)
-    {
-        armed = true;
-        blockedGesture = ControlGesture::unknown;
-    }
-    else
-    {
-        armed = false;
-        blockedGesture = acceptedGesture;
-        // The old slot has already released its active mappings. Keep only the
-        // blocked gesture token so the new slot cannot inherit a held gesture.
-        acceptedGesture = ControlGesture::unknown;
-    }
+    // Slot selection is now an independent routing layer. A held right-hand
+    // gesture must keep driving GLOBAL mappings while SELECTED routing moves to
+    // the newly selected plug-in. Preserve the accepted gesture so continuous
+    // mappings resume on the next control tick without requiring a release.
+    armed = true;
+    blockedGesture = ControlGesture::unknown;
     clearCandidate();
     missingFrames = 0;
 }

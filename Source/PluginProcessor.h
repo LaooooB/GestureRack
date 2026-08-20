@@ -148,6 +148,15 @@ public:
         updateMappingStatus ("MAPPING HISTORY RESTORED");
     }
 
+    void setNextParameterBindingScope (gr::BindingScope scope) noexcept
+    {
+        mappingEngine.setNextBindingScope (scope);
+    }
+    gr::BindingScope getNextParameterBindingScope() const noexcept
+    {
+        return mappingEngine.getNextBindingScope();
+    }
+
     bool addParameterGestureMapping (int parameterIndex,
                                      gr::ControlGesture gesture,
                                      juce::String& error);

@@ -43,6 +43,16 @@ juce::String parameterKindToString (ParameterKind kind)
     }
 }
 
+juce::String bindingScopeToString (BindingScope scope)
+{
+    switch (scope)
+    {
+        case BindingScope::global:   return "GLOBAL";
+        case BindingScope::selected: return "SELECTED";
+        default:                     return "SELECTED";
+    }
+}
+
 juce::String mappingAxisToString (MappingAxis axis)
 {
     switch (axis)
@@ -129,6 +139,7 @@ std::unique_ptr<juce::XmlElement> GestureBinding::toXml() const
     xml->setAttribute ("gesture", controlGestureToString (sourceGesture));
     xml->setAttribute ("targetType", static_cast<int> (targetType));
     xml->setAttribute ("mode", static_cast<int> (mode));
+    xml->setAttribute ("scope", static_cast<int> (scope));
     xml->setAttribute ("pluginIdentifier", pluginIdentifier);
     xml->setAttribute ("parameterStableId", parameterStableId);
     xml->setAttribute ("parameterIndexFallback", parameterIndexFallback);
@@ -159,6 +170,7 @@ std::optional<GestureBinding> GestureBinding::fromXml (const juce::XmlElement& x
     binding.sourceGesture = controlGestureFromString (xml.getStringAttribute ("gesture"));
     binding.targetType = static_cast<MappingTargetType> (xml.getIntAttribute ("targetType", 1));
     binding.mode = static_cast<MappingMode> (xml.getIntAttribute ("mode", 2));
+    binding.scope = static_cast<BindingScope> (xml.getIntAttribute ("scope", static_cast<int> (BindingScope::selected)));
     binding.pluginIdentifier = xml.getStringAttribute ("pluginIdentifier");
     binding.parameterStableId = xml.getStringAttribute ("parameterStableId");
     binding.parameterIndexFallback = xml.getIntAttribute ("parameterIndexFallback", -1);
@@ -207,6 +219,11 @@ std::optional<GestureBinding> GestureBinding::fromXml (const juce::XmlElement& x
     binding.deadband = juce::jlimit (0.0f, 0.25f, binding.deadband);
     binding.curve = juce::jlimit (0.0f, 1.0f, binding.curve);
     binding.sensitivity = juce::jlimit (0.25f, 8.0f, binding.sensitivity);
+
+    const auto scopeValue = static_cast<int> (binding.scope);
+    if (scopeValue < static_cast<int> (BindingScope::selected)
+        || scopeValue > static_cast<int> (BindingScope::global))
+        binding.scope = BindingScope::selected;
 
     const auto axisValue = static_cast<int> (binding.sourceAxis);
     if (axisValue < static_cast<int> (MappingAxis::vertical)

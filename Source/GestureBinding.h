@@ -34,6 +34,15 @@ enum class ParameterKind : int
     readOnly
 };
 
+// Scope belongs to each individual binding, not to the gesture itself. This
+// lets one gesture own GLOBAL targets and SELECTED-only targets at the same
+// time, including multiple targets inside one hosted plug-in.
+enum class BindingScope : int
+{
+    selected = 0,
+    global
+};
+
 // Continuous mappings are no longer hard-wired to hand height. The enum is
 // deliberately small today, but keeps the binding model ready for future Z,
 // rotation, pinch, velocity, etc. without adding new MappingMode values.
@@ -79,6 +88,7 @@ struct GestureBinding
     ControlGesture sourceGesture = ControlGesture::unknown;
     MappingTargetType targetType = MappingTargetType::childParameter;
     MappingMode mode = MappingMode::absoluteHeight;
+    BindingScope scope = BindingScope::selected;
 
     juce::String pluginIdentifier;
     juce::String parameterStableId;
@@ -112,6 +122,7 @@ struct GestureBinding
 juce::String mappingTargetTypeToString (MappingTargetType type);
 juce::String mappingModeToString (MappingMode mode);
 juce::String parameterKindToString (ParameterKind kind);
+juce::String bindingScopeToString (BindingScope scope);
 juce::String mappingAxisToString (MappingAxis axis);
 juce::String mappingCurveTypeToString (MappingCurveType type);
 

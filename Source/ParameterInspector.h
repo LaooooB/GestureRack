@@ -98,6 +98,127 @@ private:
     class MappingSnapshotAction;
     class CurvePreview;
 
+    // Header-only overlay so the existing ParameterInspector implementation and
+    // layout stay intact. It mirrors the existing LEARN rectangle, lets the user
+    // choose the scope before dropping a gesture, and keeps intercepting clicks
+    // while learn is armed so the scope cannot change mid-capture.
+    class BindingScopeSelector final : public juce::Component,
+                                       private juce::Timer
+    {
+    public:
+        explicit BindingScopeSelector (ParameterInspector& ownerToUse)
+            : owner (ownerToUse)
+        {
+            setOpaque (false);
+            setMouseCursor (juce::MouseCursor::PointingHandCursor);
+            owner.addAndMakeVisible (*this);
+            startTimerHz (30);
+        }
+
+        ~BindingScopeSelector() override { stopTimer(); }
+
+        bool hitTest (int x, int y) override
+        {
+            updateGeometry();
+            const auto point = juce::Point<int> (x, y);
+            return globalRect.contains (point) || selectedRect.contains (point);
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (owner.processor.isParameterLearnArmed())
+                return;
+
+            if (globalRect.contains (e.getPosition()))
+                setScope (BindingScope::global);
+            else if (selectedRect.contains (e.getPosition()))
+                setScope (BindingScope::selected);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            updateGeometry();
+            if (globalRect.isEmpty() || selectedRect.isEmpty())
+                return;
+
+            const auto armed = owner.processor.isParameterLearnArmed();
+            const auto current = owner.processor.getNextParameterBindingScope();
+
+            g.setFont (ui::metaFont());
+            g.setColour (ui::textMuted);
+            g.drawText (armed ? "SCOPE LOCKED" : "BINDING SCOPE",
+                        labelRect, juce::Justification::centredLeft);
+
+            const auto drawScope = [&] (juce::Rectangle<int> rect,
+                                        BindingScope scope,
+                                        const juce::String& text)
+            {
+                const auto active = current == scope;
+                auto fill = active ? ui::blend (ui::control, ui::accent, 0.10f) : ui::control;
+                if (armed) fill = ui::blend (fill, ui::workspace, 0.30f);
+                g.setColour (fill);
+                g.fillRoundedRectangle (rect.toFloat(), ui::metrics::controlRadius);
+                g.setColour (active ? ui::accent : ui::border);
+                g.drawRoundedRectangle (rect.toFloat().reduced (0.5f), ui::metrics::controlRadius, 0.8f);
+                g.setColour (armed ? ui::textMuted.withAlpha (0.66f)
+                                   : (active ? ui::accent : ui::text));
+                g.setFont (ui::controlFont());
+                g.drawFittedText (text, rect.reduced (5, 0), juce::Justification::centred, 1);
+            };
+
+            drawScope (globalRect, BindingScope::global, "GLOBAL");
+            drawScope (selectedRect, BindingScope::selected, "SELECTED");
+        }
+
+    private:
+        void setScope (BindingScope scope)
+        {
+            owner.processor.setNextParameterBindingScope (scope);
+            repaint();
+        }
+
+        void updateGeometry()
+        {
+            auto bounds = owner.getLocalBounds().reduced (14);
+            bounds.removeFromTop (26);
+            bounds.removeFromTop (6);
+            bounds.removeFromTop (20);
+            bounds.removeFromTop (3);
+
+            if (owner.advancedExpanded)
+            {
+                bounds.removeFromBottom (226);
+                bounds.removeFromBottom (10);
+            }
+
+            const auto dropWidth = juce::jlimit (
+                168, 224,
+                juce::roundToInt (static_cast<float> (bounds.getWidth()) * 0.19f));
+            auto learn = bounds.removeFromRight (dropWidth).reduced (10, 8);
+            auto controls = learn.removeFromBottom (44);
+            labelRect = controls.removeFromTop (12);
+            controls.removeFromTop (3);
+            constexpr int gap = 5;
+            const auto width = juce::jmax (1, (controls.getWidth() - gap) / 2);
+            globalRect = controls.removeFromLeft (width);
+            controls.removeFromLeft (gap);
+            selectedRect = controls;
+        }
+
+        void timerCallback() override
+        {
+            if (getBounds() != owner.getLocalBounds())
+                setBounds (owner.getLocalBounds());
+            toFront (false);
+            repaint();
+        }
+
+        ParameterInspector& owner;
+        juce::Rectangle<int> labelRect;
+        juce::Rectangle<int> globalRect;
+        juce::Rectangle<int> selectedRect;
+    };
+
     void timerCallback() override;
     void refreshData (bool forceRebuild);
     void parameterSelectionChanged (int row);
@@ -168,6 +289,8 @@ private:
     bool learnWasArmed = false;
     int learnUndoSlot = -1;
     std::vector<GestureBinding> learnUndoBefore;
+
+    BindingScopeSelector bindingScopeSelector { *this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParameterInspector)
 };
