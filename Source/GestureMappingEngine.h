@@ -18,11 +18,13 @@ public:
     std::vector<ParameterDescriptor> enumerateParameters (int slotIndex) const;
     std::vector<GestureBinding> getMappings (int slotIndex) const;
 
-    // The UI sets this immediately before a direct assignment or a learn
-    // session. Parameter learn is polled on the same message thread, so the
-    // selected scope remains deterministic for the lifetime of that session.
+    // Parameter and slot-action learn states are deliberately separate. A user
+    // hovering a GLOBAL BYPASS target must not silently change the scope of the
+    // next native-parameter learn session.
     void setNextBindingScope (BindingScope scope) noexcept { nextBindingScope = scope; }
     BindingScope getNextBindingScope() const noexcept { return nextBindingScope; }
+    void setNextSlotActionScope (BindingScope scope) noexcept { nextSlotActionScope = scope; }
+    BindingScope getNextSlotActionScope() const noexcept { return nextSlotActionScope; }
 
     bool addParameterBinding (int slotIndex,
                               ControlGesture gesture,
@@ -39,8 +41,8 @@ public:
     void clearAllMappings (int slotIndex);
 
     // slotIndex is the currently SELECTED slot. Runtime dispatch fans GLOBAL
-    // child-parameter bindings out across every loaded slot, while SELECTED
-    // bindings and slot actions only execute for slotIndex.
+    // bindings of either kind across every loaded slot, while SELECTED bindings
+    // execute only for slotIndex.
     void triggerGestureEntered (int slotIndex, ControlGesture gesture);
     void triggerGestureExited (int slotIndex, ControlGesture gesture);
     void releaseAllActiveGestures();
@@ -103,5 +105,6 @@ private:
     std::map<std::string, RuntimeState> runtimeStates;
     std::atomic<int> internalWriteDepth { 0 };
     BindingScope nextBindingScope = BindingScope::selected;
+    BindingScope nextSlotActionScope = BindingScope::selected;
 };
 }

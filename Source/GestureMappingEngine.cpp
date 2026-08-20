@@ -123,9 +123,6 @@ MappingMode GestureMappingEngine::defaultModeForParameter (const ParameterDescri
 
 float GestureMappingEngine::normaliseHorizontalPalmX (float palmX) noexcept
 {
-    // Match the vertical control window already used by VisionEngine: users do
-    // not need to touch the camera edges to reach 0/1. The preview is mirrored,
-    // so moving the physical right hand toward the visible right side increases X.
     constexpr auto left = 0.15f;
     constexpr auto right = 0.85f;
     return juce::jlimit (0.0f, 1.0f, (palmX - left) / (right - left));
@@ -135,11 +132,6 @@ bool GestureMappingEngine::bindingRespondsInContext (const GestureBinding& bindi
                                                      int bindingSlotIndex,
                                                      int selectedSlotIndex) const noexcept
 {
-    // Slot actions intentionally remain local to the selected plug-in. Scope is
-    // a parameter-routing concept; a GLOBAL Palm must not power/bypass every FX.
-    if (binding.targetType == MappingTargetType::slotAction)
-        return bindingSlotIndex == selectedSlotIndex;
-
     return binding.scope == BindingScope::global
         || bindingSlotIndex == selectedSlotIndex;
 }
@@ -204,11 +196,6 @@ bool GestureMappingEngine::addParameterBinding (int slotIndex,
     binding.parameterIndexFallback = descriptor.index;
     binding.parameterName = descriptor.name;
 
-    // A parameter still has one gesture owner, while one gesture may fan out to
-    // any number of different parameters. Scope belongs to the binding. Rebinding
-    // the exact same Gesture + Plugin + Parameter in the other scope MOVES that
-    // binding instead of creating a second writer, enforcing the single-scope
-    // invariant requested by the UI model.
     for (const auto& existing : getMappings (slotIndex))
     {
         if (! sameParameterTarget (existing, binding))
@@ -250,8 +237,6 @@ bool GestureMappingEngine::addParameterBinding (int slotIndex,
         replacement.parameterIndexFallback = binding.parameterIndexFallback;
         replacement.parameterName = binding.parameterName;
 
-        // Close any active host automation gesture before changing ownership so
-        // the old source cannot leave an unmatched beginChangeGesture behind.
         endHostGesture (slotIndex, existing);
         runtimeStates.erase (existing.id.toString().toStdString());
         if (! slots[static_cast<size_t> (slotIndex)]->updateMapping (replacement))
@@ -283,8 +268,6 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
         return false;
     }
 
-    // Parameter fan-out is allowed, but two slot-state actions for the same
-    // gesture would fight each other on the same enter event.
     for (const auto& existing : getMappings (slotIndex))
     {
         if (existing.sourceGesture != gesture || existing.targetType != MappingTargetType::slotAction)
@@ -292,8 +275,22 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
 
         if (existing.mode == mode)
         {
-            error = "This gesture is already mapped to that slot action.";
-            return false;
+            if (existing.scope == nextSlotActionScope)
+            {
+                error = "This gesture is already mapped to that slot action in "
+                      + bindingScopeToString (existing.scope) + ".";
+                return false;
+            }
+
+            auto replacement = existing;
+            replacement.scope = nextSlotActionScope;
+            replacement.slotIndex = slotIndex;
+            if (! slots[static_cast<size_t> (slotIndex)]->updateMapping (replacement))
+            {
+                error = "The slot action scope could not be changed.";
+                return false;
+            }
+            return true;
         }
 
         error = "This gesture already owns the opposite slot-state action.";
@@ -305,7 +302,7 @@ bool GestureMappingEngine::addSlotActionBinding (int slotIndex,
     binding.sourceGesture = gesture;
     binding.targetType = MappingTargetType::slotAction;
     binding.mode = mode;
-    binding.scope = BindingScope::selected;
+    binding.scope = nextSlotActionScope;
     slots[static_cast<size_t> (slotIndex)]->addMapping (binding);
     return true;
 }
@@ -331,8 +328,6 @@ bool GestureMappingEngine::updateBinding (const GestureBinding& binding, juce::S
     if (scope < static_cast<int> (BindingScope::selected)
         || scope > static_cast<int> (BindingScope::global))
         updated.scope = BindingScope::selected;
-    if (updated.targetType == MappingTargetType::slotAction)
-        updated.scope = BindingScope::selected;
 
     const auto axis = static_cast<int> (updated.sourceAxis);
     if (axis < static_cast<int> (MappingAxis::vertical)
@@ -343,18 +338,29 @@ bool GestureMappingEngine::updateBinding (const GestureBinding& binding, juce::S
         || curveType > static_cast<int> (MappingCurveType::logarithmic))
         updated.curveType = MappingCurveType::linear;
 
-    if (updated.targetType == MappingTargetType::childParameter)
+    for (const auto& existing : getMappings (updated.slotIndex))
     {
-        for (const auto& existing : getMappings (updated.slotIndex))
+        if (existing.id == updated.id)
+            continue;
+
+        if (updated.targetType == MappingTargetType::childParameter)
         {
-            if (existing.id == updated.id)
-                continue;
             if (existing.sourceGesture == updated.sourceGesture
                 && sameParameterTarget (existing, updated))
             {
                 error = "The same gesture and parameter can only exist in one scope.";
                 return false;
             }
+        }
+        else if (updated.targetType == MappingTargetType::slotAction
+                 && existing.targetType == MappingTargetType::slotAction
+                 && existing.sourceGesture == updated.sourceGesture)
+        {
+            if (existing.mode == updated.mode)
+                error = "The same gesture and slot action can only exist in one scope.";
+            else
+                error = "This gesture already owns the opposite slot-state action.";
+            return false;
         }
     }
 
@@ -625,9 +631,6 @@ void GestureMappingEngine::processContinuousForSlot (int bindingSlotIndex,
         const auto selectedInput = binding.sourceAxis == MappingAxis::horizontal ? sourceX : sourceY;
         auto source = binding.inverted ? 1.0f - selectedInput : selectedInput;
 
-        // Deadband is evaluated before sensitivity so increasing sensitivity
-        // does not also amplify camera landmark noise. Sensitivity then narrows
-        // or widens the useful physical travel around the centre of the frame.
         if (state.initialised && std::abs (source - state.lastSource) < binding.deadband)
             source = state.lastSource;
         else

@@ -4,14 +4,14 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "PluginProcessor.h"
 #include "ParameterInspector.h"
+#include "PluginBrowser.h"
 #include "VisionFrameReader.h"
 #include "UiTheme.h"
 #include "UiMetrics.h"
-
-class PluginBrowserComponent;
 
 class GestureRackAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                               private juce::Timer,
@@ -146,10 +146,306 @@ private:
     juce::Rectangle<int> cameraPreviewBounds;
     juce::Rectangle<int> cameraTelemetryBounds;
 
+    class SlotActionScopeOverlay final : public juce::Component,
+                                         private juce::Timer
+    {
+    public:
+        explicit SlotActionScopeOverlay (GestureRackAudioProcessorEditor& ownerToUse)
+            : owner (ownerToUse)
+        {
+            setOpaque (false);
+            owner.addAndMakeVisible (*this);
+            startTimerHz (60);
+        }
+
+        ~SlotActionScopeOverlay() override { stopTimer(); }
+
+        bool hitTest (int x, int y) override
+        {
+            if (owner.pluginBrowser != nullptr && owner.pluginBrowser->isVisible())
+                return false;
+            updateGeometry();
+            const juce::Point<int> point { x, y };
+            return activeScopeRect.contains (point)
+                || bypassScopeRect.contains (point)
+                || activeGestureRect.contains (point)
+                || bypassGestureRect.contains (point);
+        }
+
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            updateGeometry();
+            const auto point = e.getPosition();
+
+            if (e.mods.isRightButtonDown() || e.mods.isPopupMenu())
+            {
+                if (activeGestureRect.contains (point))
+                    removePrimary (gr::MappingMode::triggerSetActive);
+                else if (bypassGestureRect.contains (point))
+                    removePrimary (gr::MappingMode::triggerSetBypassed);
+                return;
+            }
+
+            if (activeScopeRect.contains (point))
+                togglePrimaryScope (gr::MappingMode::triggerSetActive);
+            else if (bypassScopeRect.contains (point))
+                togglePrimaryScope (gr::MappingMode::triggerSetBypassed);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            if (owner.pluginBrowser != nullptr && owner.pluginBrowser->isVisible())
+                return;
+            updateGeometry();
+            if (activeTargetRect.isEmpty() || bypassTargetRect.isEmpty())
+                return;
+
+            const auto mouse = getMouseXYRelative();
+            const auto leftDown = juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown();
+            const auto activeDrag = leftDown && activeTargetRect.contains (mouse);
+            const auto bypassDrag = leftDown && bypassTargetRect.contains (mouse);
+
+            if (activeDrag)
+                drawSplitTarget (g, activeTargetRect, mouse.x);
+            else
+                drawActionRow (g, activeRowRect,
+                               gr::MappingMode::triggerSetActive,
+                               "ACTIVE", false,
+                               activeGestureRect, activeScopeRect);
+
+            if (bypassDrag)
+                drawSplitTarget (g, bypassTargetRect, mouse.x);
+            else
+                drawActionRow (g, bypassRowRect,
+                               gr::MappingMode::triggerSetBypassed,
+                               "BYPASS", true,
+                               bypassGestureRect, bypassScopeRect);
+        }
+
+    private:
+        std::optional<gr::GestureBinding> primaryBinding (gr::MappingMode mode) const
+        {
+            std::optional<gr::GestureBinding> result;
+            for (const auto& binding : owner.processor.getSlotMappings (owner.processor.getSelectedSlot()))
+                if (binding.targetType == gr::MappingTargetType::slotAction
+                    && binding.mode == mode)
+                    result = binding;
+            return result;
+        }
+
+        int bindingCount (gr::MappingMode mode) const
+        {
+            auto count = 0;
+            for (const auto& binding : owner.processor.getSlotMappings (owner.processor.getSelectedSlot()))
+                if (binding.targetType == gr::MappingTargetType::slotAction
+                    && binding.mode == mode)
+                    ++count;
+            return count;
+        }
+
+        static juce::Colour scopeColour (gr::BindingScope scope)
+        {
+            return scope == gr::BindingScope::global ? gr::ui::tertiary : gr::ui::accent;
+        }
+
+        void togglePrimaryScope (gr::MappingMode mode)
+        {
+            auto binding = primaryBinding (mode);
+            if (! binding.has_value()) return;
+            binding->scope = binding->scope == gr::BindingScope::global
+                ? gr::BindingScope::selected
+                : gr::BindingScope::global;
+            juce::String error;
+            owner.processor.updateGestureMapping (*binding, error);
+            repaint();
+        }
+
+        void removePrimary (gr::MappingMode mode)
+        {
+            if (const auto binding = primaryBinding (mode); binding.has_value())
+                owner.processor.removeGestureMapping (binding->id);
+            repaint();
+        }
+
+        void drawSplitTarget (juce::Graphics& g,
+                              juce::Rectangle<int> rect,
+                              int mouseX)
+        {
+            auto left = rect;
+            auto right = left.removeFromRight (left.getWidth() / 2);
+            const auto leftHot = left.contains (mouseX, rect.getCentreY());
+            const auto selectedScope = mouseX < rect.getCentreX()
+                ? gr::BindingScope::selected
+                : gr::BindingScope::global;
+            owner.processor.setNextSlotActionBindingScope (selectedScope);
+
+            const auto drawHalf = [&] (juce::Rectangle<int> area,
+                                       gr::BindingScope scope,
+                                       const juce::String& label,
+                                       bool hot)
+            {
+                const auto colour = scopeColour (scope);
+                g.setColour (hot ? gr::ui::blend (gr::ui::controlHigh, colour, 0.12f)
+                                 : gr::ui::control);
+                g.fillRoundedRectangle (area.toFloat(), gr::ui::metrics::controlRadius);
+                g.setColour (hot ? colour : gr::ui::border);
+                g.drawRoundedRectangle (area.toFloat().reduced (0.5f),
+                                        gr::ui::metrics::controlRadius, 0.9f);
+                g.setColour (hot ? colour : gr::ui::textMuted);
+                g.setFont (gr::ui::metaFont());
+                g.drawFittedText (label, area.reduced (3, 0),
+                                  juce::Justification::centred, 1);
+            };
+
+            drawHalf (left, gr::BindingScope::selected, "SELECTED", leftHot);
+            drawHalf (right, gr::BindingScope::global, "GLOBAL", ! leftHot);
+        }
+
+        void drawActionRow (juce::Graphics& g,
+                            juce::Rectangle<int> rect,
+                            gr::MappingMode mode,
+                            const juce::String& actionLabel,
+                            bool compact,
+                            juce::Rectangle<int>& gestureRectOut,
+                            juce::Rectangle<int>& scopeRectOut)
+        {
+            if (rect.isEmpty()) return;
+
+            g.setColour (gr::ui::control.withAlpha (0.98f));
+            g.fillRoundedRectangle (rect.toFloat(), gr::ui::metrics::controlRadius);
+            g.setColour (gr::ui::border);
+            g.drawRoundedRectangle (rect.toFloat().reduced (0.5f),
+                                    gr::ui::metrics::controlRadius, 0.8f);
+
+            auto inner = rect.reduced (5, 4);
+            const auto actionWidth = compact ? 44 : 58;
+            const auto scopeWidth = compact ? 62 : 78;
+            auto action = inner.removeFromRight (juce::jmin (actionWidth, inner.getWidth()));
+            if (inner.getWidth() > 3) inner.removeFromRight (3);
+            scopeRectOut = inner.removeFromRight (juce::jmin (scopeWidth, inner.getWidth()));
+            if (inner.getWidth() > 3) inner.removeFromRight (3);
+            gestureRectOut = inner;
+
+            const auto binding = primaryBinding (mode);
+            const auto count = bindingCount (mode);
+
+            g.setFont (gr::ui::metaFont());
+            g.setColour (gr::ui::textMuted);
+            g.drawFittedText (actionLabel, action,
+                              juce::Justification::centred, 1);
+
+            if (! binding.has_value())
+            {
+                g.setColour (gr::ui::workspace);
+                g.fillRoundedRectangle (gestureRectOut.toFloat(), 4.0f);
+                g.setColour (gr::ui::border);
+                g.drawRoundedRectangle (gestureRectOut.toFloat().reduced (0.5f), 4.0f, 0.8f);
+                g.setColour (gr::ui::textMuted);
+                g.setFont (gr::ui::metaFont());
+                g.drawFittedText ("DROP", gestureRectOut.reduced (3, 0),
+                                  juce::Justification::centred, 1);
+                scopeRectOut = {};
+                return;
+            }
+
+            auto gestureText = gr::controlGestureToShortLabel (binding->sourceGesture).toUpperCase();
+            if (count > 1) gestureText += " +" + juce::String (count - 1);
+
+            g.setColour (gr::ui::workspace);
+            g.fillRoundedRectangle (gestureRectOut.toFloat(), 4.0f);
+            g.setColour (gr::ui::border.withAlpha (0.78f));
+            g.drawRoundedRectangle (gestureRectOut.toFloat().reduced (0.5f), 4.0f, 0.8f);
+            g.setColour (binding->enabled ? gr::ui::text : gr::ui::textMuted);
+            g.setFont (gr::ui::metaFont());
+            g.drawFittedText (gestureText, gestureRectOut.reduced (3, 0),
+                              juce::Justification::centred, 1);
+
+            const auto colour = scopeColour (binding->scope);
+            g.setColour (gr::ui::blend (gr::ui::workspace, colour, 0.08f));
+            g.fillRoundedRectangle (scopeRectOut.toFloat(), 4.0f);
+            g.setColour (colour);
+            g.drawRoundedRectangle (scopeRectOut.toFloat().reduced (0.5f), 4.0f, 0.8f);
+            g.setColour (colour);
+            g.setFont (gr::ui::metaFont());
+            g.drawFittedText (gr::bindingScopeToString (binding->scope).toUpperCase(),
+                              scopeRectOut.reduced (3, 0),
+                              juce::Justification::centred, 1);
+        }
+
+        void updateGeometry()
+        {
+            if (getBounds() != owner.getLocalBounds())
+                setBounds (owner.getLocalBounds());
+
+            activeTargetRect = owner.bypassButton.getBounds();
+            activeRowRect = activeTargetRect;
+            if (! activeTargetRect.isEmpty() && ! owner.pluginPanelBounds.isEmpty())
+            {
+                const auto rowWidth = juce::jmin (250, owner.pluginPanelBounds.getWidth() - 28);
+                const auto left = juce::jmax (owner.pluginPanelBounds.getX() + 14,
+                                              activeTargetRect.getRight() - rowWidth);
+                activeRowRect = { left, activeTargetRect.getY(),
+                                  activeTargetRect.getRight() - left,
+                                  activeTargetRect.getHeight() };
+            }
+
+            bypassTargetRect = {};
+            bypassRowRect = {};
+            if (! owner.cameraPanelBounds.isEmpty() && ! owner.parameterInspector.getBounds().isEmpty())
+            {
+                const juce::Rectangle<int> gestureBounds {
+                    owner.cameraPanelBounds.getX(),
+                    owner.parameterInspector.getY(),
+                    owner.cameraPanelBounds.getWidth(),
+                    owner.parameterInspector.getHeight()
+                };
+                auto content = gestureBounds.reduced (14);
+                content.removeFromTop (28);
+                content.removeFromTop (8);
+                auto bottom = content.removeFromBottom (56);
+                content.removeFromBottom (10);
+                constexpr int gap = 10;
+                bypassTargetRect = bottom.removeFromLeft ((bottom.getWidth() - gap) / 2);
+                bypassRowRect = bypassTargetRect;
+            }
+        }
+
+        void timerCallback() override
+        {
+            updateGeometry();
+            const auto mouse = getMouseXYRelative();
+            const auto leftDown = juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown();
+            if (leftDown)
+            {
+                if (activeTargetRect.contains (mouse))
+                    owner.processor.setNextSlotActionBindingScope (
+                        mouse.x < activeTargetRect.getCentreX()
+                            ? gr::BindingScope::selected : gr::BindingScope::global);
+                else if (bypassTargetRect.contains (mouse))
+                    owner.processor.setNextSlotActionBindingScope (
+                        mouse.x < bypassTargetRect.getCentreX()
+                            ? gr::BindingScope::selected : gr::BindingScope::global);
+            }
+            toFront (false);
+            repaint();
+        }
+
+        GestureRackAudioProcessorEditor& owner;
+        juce::Rectangle<int> activeTargetRect;
+        juce::Rectangle<int> bypassTargetRect;
+        juce::Rectangle<int> activeRowRect;
+        juce::Rectangle<int> bypassRowRect;
+        juce::Rectangle<int> activeGestureRect;
+        juce::Rectangle<int> bypassGestureRect;
+        juce::Rectangle<int> activeScopeRect;
+        juce::Rectangle<int> bypassScopeRect;
+    };
+
     std::unique_ptr<PluginBrowserComponent> pluginBrowser;
     std::unique_ptr<juce::FileChooser> presetFileChooser;
     bool adaptiveResizeInProgress = false;
     float uiScale = 1.0f;
+    SlotActionScopeOverlay slotActionScopeOverlay { *this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GestureRackAudioProcessorEditor)
 };

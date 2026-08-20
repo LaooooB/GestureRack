@@ -156,6 +156,14 @@ public:
     {
         return mappingEngine.getNextBindingScope();
     }
+    void setNextSlotActionBindingScope (gr::BindingScope scope) noexcept
+    {
+        mappingEngine.setNextSlotActionScope (scope);
+    }
+    gr::BindingScope getNextSlotActionBindingScope() const noexcept
+    {
+        return mappingEngine.getNextSlotActionScope();
+    }
 
     bool addParameterGestureMapping (int parameterIndex,
                                      gr::ControlGesture gesture,
