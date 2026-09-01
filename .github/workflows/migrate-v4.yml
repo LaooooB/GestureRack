@@ -1,0 +1,86 @@
+name: Apply Cross-Platform v4 Migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.gesturerack_migration/TRIGGER_V4'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gesturerack-v4-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reassemble and verify migration payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .gesturerack_migration/part_* > "$RUNNER_TEMP/gesturerack_v4_migrate.py"
+          test "$(wc -c < "$RUNNER_TEMP/gesturerack_v4_migrate.py" | tr -d ' ')" = "99841"
+          echo "9887f12d914fd873c12a551dffcbbc5206b9632b1689bb3d2b4a5f8583c4f3f8  $RUNNER_TEMP/gesturerack_v4_migrate.py" | sha256sum -c -
+          python3 -m py_compile "$RUNNER_TEMP/gesturerack_v4_migrate.py"
+
+      - name: Apply all macOS and cross-platform refactors
+        run: python3 "$RUNNER_TEMP/gesturerack_v4_migrate.py" "$GITHUB_WORKSPACE"
+
+      - name: Validate migrated source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            VisionEngine/vision_engine.py \
+            VisionEngine/platform_camera.py \
+            VisionEngine/vision_runtime_io.py \
+            VisionEngine/vision_runtime_self_test.py \
+            VisionEngine/control_transport.py \
+            VisionEngine/frame_transport.py \
+            release.py \
+            tools/release/pipeline.py
+          python3 -m unittest -v \
+            VisionEngine/test_control_transport.py \
+            VisionEngine/test_frame_transport.py \
+            VisionEngine/test_platform_camera.py
+          bash -n build_macos.sh package_macos.sh \
+            tools/build_vision_macos.sh \
+            tools/verify_macos_bundle.sh \
+            tools/verify_macos_gesture_runtime.sh \
+            packaging/macos/scripts/postinstall
+          python3 release.py --help >/dev/null
+          git diff --check
+
+      - name: Remove superseded workflows and migration staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-dynamic-chain-v040.yml \
+            .github/workflows/verify-dynamic-chain-v040.yml \
+            .github/workflows/windows-vst3-build.yml \
+            .github/workflows/windows-vst3-fast-package.yml \
+            .github/workflows/migrate-v4.yml
+          rm -rf .gesturerack_migration
+
+      - name: Commit migration to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "GestureRack Migration Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'No migration changes to commit'; exit 1; }
+          git commit -m "Merge macOS support and cross-platform architecture refactor"
+          git push origin HEAD:main
